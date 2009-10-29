@@ -105,5 +105,25 @@ Get or set the name property / HTML attribute.
 
 =cut
 
+#----------------------------------------------------------------------------
+
+=head2 toHtml ( )
+
+Return the HTML for the form
+
+=cut
+
+sub toHtml {
+    my ( $self ) = @_;
+    
+    my @attrs   = qw{ action method name enctype };
+    my $attrs   = join " ", map { qq{$_="} . $self->{$_} . qq{"} } @attrs;
+
+    my $html    = '<form %s>', $attrs;
+    $html   .= $self->maybe::next::method;
+    $html   .= '</form>';
+
+    return $html;
+}
 
 1;
