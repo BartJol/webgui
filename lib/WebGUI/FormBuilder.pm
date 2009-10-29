@@ -2,6 +2,11 @@ package WebGUI::FormBuilder;
 
 use strict;
 
+use base qw{ 
+    WebGUI::FormBuilder::Role::HasFields 
+    WebGUI::FormBuilder::Role::HasFieldsets 
+    WebGUI::FormBuilder::Role::HasTabs
+};
 
 
 =head1 METHODS
@@ -55,6 +60,50 @@ sub newFromHashRef {
     # TODO
 }
 
+#----------------------------------------------------------------------------
+
+=head2 newFromJson ( session, json )
+
+Create a new FormBuilder object from a serialized JSON string (see L<toJson>).
+
+=cut
+
+sub newFromJson {
+    my ( $class, $session, $json ) = @_;
+    return $class->newFromHashRef( $session, JSON->new->decode( $json );
+}
+
+#----------------------------------------------------------------------------
+
+=head2 action ( [ newAction ] )
+
+Get or set the action property / HTML attribute.
+
+=cut
+
+#----------------------------------------------------------------------------
+
+=head2 enctype ( [ newEnctype ] )
+
+Get or set the enctype property / HTML attribute.
+
+=cut
+
+#----------------------------------------------------------------------------
+
+=head2 method ( [ newMethod ] )
+
+Get or set the method property / HTML attribute.
+
+=cut
+
+#----------------------------------------------------------------------------
+
+=head2 name ( [ newName ] )
+
+Get or set the name property / HTML attribute.
+
+=cut
 
 
 1;
