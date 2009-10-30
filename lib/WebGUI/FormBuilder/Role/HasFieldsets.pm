@@ -2,6 +2,7 @@ package WebGUI::FormBuilder::Role::HasFieldsets;
 
 use strict;
 use Class::C3;
+use Scalar::Util ();
 
 =head1 METHODS
 
@@ -98,6 +99,26 @@ Get all fieldset objects. Returns the arrayref of fieldsets.
 sub getFieldsets {
     my ( $self ) = @_;
     return $self->{_fieldsets};
+}
+
+#----------------------------------------------------------------------------
+
+=head2 toHashRef ( )
+
+Serialize the tabs in this object
+
+=cut
+
+sub toHashRef {
+    my ( $self ) = @_;
+    my $hashref         = $self->maybe::next::method || {};
+    $hashref->{tabs}    = [];
+
+    for my $tab ( @{$self->{_tabs}} ) {
+        push @{$hashref->{tabs}}, $tab->toHashRef;
+    }
+
+    return $hashref;
 }
 
 #----------------------------------------------------------------------------

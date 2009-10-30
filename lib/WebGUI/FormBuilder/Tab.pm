@@ -36,35 +36,79 @@ Optional. A label for the tab.
 
 sub new {
     my ( $class, $session, %properties ) = @_;
-
-    # TODO
+    my $self    = $class->instantiate( %properties );
+    $self->{_session} = $session;
+    return $self;
 }
 
 #----------------------------------------------------------------------------
 
-=head2 newFromHashRef ( session, hashRef )
+=head2 newFromHashRef ( session, formHashRef )
 
-Create a new Tab object from a serialized hashref. See L<toHashRef> for details.
+Create a new Tab object from a serialized hash ref (see L<toHashRef>).
 
 =cut
 
 sub newFromHashRef {
     my ( $class, $session, $hashRef ) = @_;
-    
-    # TODO
+    my %properties;
+    $properties{$class->getProperties} = $hashref->{$class->getProperties};
+    my $self    = $class->new( $session, %properties );
+    $self->addFromHashRef( $hashRef );
+    return $self;
 }
 
 #----------------------------------------------------------------------------
 
-=head2 toHashRef ( ) 
+=head2 label ( newLabel )
 
-Serialize the Tab to a hash reference for storage.
+A label to show the user
 
 =cut
 
-sub toHashRef {
+#----------------------------------------------------------------------------
+
+=head2 name ( )
+
+The name of the fieldset. Read-only.
+
+=cut
+
+sub name {
     my ( $self ) = @_;
-    # TODO
+    return $self->next::method;
+}
+
+#----------------------------------------------------------------------------
+
+=head2 session ( )
+
+Get the WebGUI::Session attached to this object
+
+=cut
+
+sub session {
+    my ( $self ) = @_;
+    return $self->{_session};
+}
+
+#----------------------------------------------------------------------------
+
+=head2 toHashRef ( )
+
+Serialize this tab to a hashref to be rebuilt later.
+
+=cut
+
+sub toHashRef { 
+    my ( $self ) = @_;
+    my $hashref = $self->maybe::next::method || {};
+
+    for my $key ( $self->getProperties ) {
+        $hashref->{ $key } = $self->get( $key );
+    }
+
+    return $hashref;
 }
 
 #----------------------------------------------------------------------------

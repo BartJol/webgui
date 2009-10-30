@@ -2,6 +2,7 @@ package WebGUI::FormBuilder::Role::HasFields;
 
 use strict;
 use Class::C3;
+use Scalar::Util ();
 
 
 =head1 METHODS
@@ -95,6 +96,26 @@ sub getFieldsRecursive {
     }
     
     return $fields;
+}
+
+#----------------------------------------------------------------------------
+
+=head2 toHashRef ( )
+
+Serialize the fields in this object
+
+=cut
+
+sub toHashRef {
+    my ( $self ) = @_;
+    my $hashref         = $self->maybe::next::method || {};
+    $hashref->{fields}    = [];
+
+    for my $field ( @{$self->{_fields}} ) {
+        push @{$hashref->{fields}}, $field->toHashRef;
+    }
+
+    return $hashref;
 }
 
 #----------------------------------------------------------------------------

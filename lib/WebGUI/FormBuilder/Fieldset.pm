@@ -8,6 +8,13 @@ use base qw{
     WebGUI::FormBuilder::Role::HasTabs
 };
 
+use WebGUI::Definition (
+    properties      => {
+        name        => { },
+        label       => { },
+    },
+);
+
 =head1 METHODS
 
 =cut
@@ -24,11 +31,16 @@ a list of name => value pairs.
 
 =item name
 
-Required. The name of the fieldset.
+Required. The name of the fieldset. Cannot be changed after initially set, 
+otherwise the parent <form> may not work correctly.
+
+=item label
+
+Optional. A label to show the user.
 
 =item legend
 
-Optional. A label to show the user.
+Optional. A synonym for C<label>.
 
 =back
 
@@ -36,37 +48,92 @@ Optional. A label to show the user.
 
 sub new {
     my ( $class, $session, %properties ) = @_;
-
-    # TODO
+    my $self    = $class->instantiate( %properties );
+    $self->{_session} = $session;
+    return $self;
 }
 
 #----------------------------------------------------------------------------
 
-=head2 newFromHashRef ( session, hashref )
+=head2 newFromHashRef ( session, formHashRef )
 
-Create a new Fieldset object from the given hashref. See L<toHashRef> for 
-information.
+Create a new FormBuilder object from a serialized hash ref (see L<toHashRef>).
 
 =cut
 
 sub newFromHashRef {
     my ( $class, $session, $hashRef ) = @_;
+    my %properties;
+    $properties{$class->getProperties} = $hashref->{$class->getProperties};
+    my $self    = $class->new( $session, %properties );
+    $self->addFromHashRef( $hashRef );
+    return $self;
+}
 
-    # TODO
+#----------------------------------------------------------------------------
+
+=head2 label ( newLabel )
+
+A label to show the user
+
+=cut
+
+#----------------------------------------------------------------------------
+
+=head2 legend ( newLegend )
+
+A synonym for label.
+
+=cut
+
+sub legend {
+    my ( $self, @args ) = @_;
+    return $self->label( @args );
+}
+
+#----------------------------------------------------------------------------
+
+=head2 name ( )
+
+The name of the fieldset. Read-only.
+
+=cut
+
+sub name {
+    my ( $self ) = @_;
+    return $self->next::method;
+}
+
+#----------------------------------------------------------------------------
+
+=head2 session ( )
+
+Get the WebGUI::Session attached to this object
+
+=cut
+
+sub session {
+    my ( $self ) = @_;
+    return $self->{_session};
 }
 
 #----------------------------------------------------------------------------
 
 =head2 toHashRef ( )
 
-Serialize this tab to a hashref to be rebuilt later.
+Serialize this fieldset to a hashref to be rebuilt later.
 
 =cut
 
 sub toHashRef { 
     my ( $self ) = @_;
+    my $hashref = $self->maybe::next::method || {};
 
-    # TODO
+    for my $key ( $self->getProperties ) {
+        $hashref->{ $key } = $self->get( $key );
+    }
+
+    return $hashref;
 }
 
 #----------------------------------------------------------------------------

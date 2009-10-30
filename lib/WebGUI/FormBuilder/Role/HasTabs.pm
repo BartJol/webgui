@@ -2,6 +2,7 @@ package WebGUI::FormBuilder::Role::HasTabs;
 
 use strict;
 use Class::C3;
+use Scalar::Util ();
 
 =head1 METHODS
 
@@ -85,6 +86,26 @@ Get all tab objects. Returns the arrayref of tabs.
 sub getTabs {
     my ( $self ) = @_;
     return $self->{_tabs};
+}
+
+#----------------------------------------------------------------------------
+
+=head2 toHashRef ( )
+
+Serialize the tabs in this object
+
+=cut
+
+sub toHashRef {
+    my ( $self ) = @_;
+    my $hashref         = $self->maybe::next::method || {};
+    $hashref->{tabs}    = [];
+
+    for my $tab ( @{$self->{_tabs}} ) {
+        push @{$hashref->{tabs}}, $tab->toHashRef;
+    }
+
+    return $hashref;
 }
 
 #----------------------------------------------------------------------------
