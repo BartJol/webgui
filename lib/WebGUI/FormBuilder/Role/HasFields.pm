@@ -9,6 +9,26 @@ use Scalar::Util ();
 
 #----------------------------------------------------------------------------
 
+=head2 addFromHashRef( hashRef )
+
+Add the tabs from the given serialized hashRef. See C<toHashRef> for more
+information.
+
+=cut
+
+sub addFromHashRef {
+    my ( $self, $hashref ) = @_;
+
+    for my $field ( @{$hashref->{fields}} ) {
+        # TODO Create Field object
+        # $self->addField( $fieldObject );
+    }
+
+    $self->maybe::next::method;
+}
+
+#----------------------------------------------------------------------------
+
 =head2 addField ( WebGUI::Form::Control )
 
 Add a field. Any WebGUI::Form::Control object.

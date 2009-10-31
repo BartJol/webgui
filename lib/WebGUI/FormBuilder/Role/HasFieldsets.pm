@@ -57,6 +57,26 @@ sub addFieldset {
 
 #----------------------------------------------------------------------------
 
+=head2 addFromHashRef( hashRef )
+
+Add the fieldsets from the given serialized hashRef. See C<toHashRef> for more
+information.
+
+=cut
+
+sub addFromHashRef {
+    my ( $self, $hashref ) = @_;
+
+    for my $fieldset ( @{$hashref->{fieldsets}} ) {
+        my $fs  = WebGUI::FormBuilder::Fieldset->newFromHashref( $self->session, $fieldset );
+        $self->addFieldset( $fs );
+    }
+
+    $self->maybe::next::method;
+}
+
+#----------------------------------------------------------------------------
+
 =head2 deleteFieldset ( name )
 
 Delete a fieldset by name. Returns the fieldset deleted.

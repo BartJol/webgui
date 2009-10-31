@@ -10,6 +10,27 @@ use Scalar::Util ();
 
 #----------------------------------------------------------------------------
 
+=head2 addFromHashRef( hashRef )
+
+Add the tabs from the given serialized hashRef. See C<toHashRef> for more
+information.
+
+=cut
+
+sub addFromHashRef {
+    my ( $self, $hashref ) = @_;
+
+    for my $tab ( @{$hashref->{tabs}} ) {
+        my $tabObject  
+            = WebGUI::FormBuilder::Tab->newFromHashref( $self->session, $tab );
+        $self->addTab( $tabObject );
+    }
+
+    $self->maybe::next::method;
+}
+
+#----------------------------------------------------------------------------
+
 =head2 addTab ( properties )
 
 Add a tab. C<properties> is a list of name => value pairs to be passed to
