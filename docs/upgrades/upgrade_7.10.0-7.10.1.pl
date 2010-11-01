@@ -32,6 +32,8 @@ my $session = start(); # this line required
 
 # upgrade functions go here
 uniqueProductLocations($session);
+removeBadSpanishFile($session);
+i18nForAddonsTitle($session);
 
 finish($session); # this line required
 
@@ -67,17 +69,71 @@ sub uniqueProductLocations {
 #----------------------------------------------------------------------------
 # This internationalizes the link text of the addons link in the adminconsole
 sub i18nForAddonsTitle {
-	my $session = shift;
-	my $adminConsole = $session->config->get('adminConsole');
-	$adminConsole->{'addons'} = {
-	      icon    => "addons.png",
-	      uiLevel => 1,
-	      group   => "12",
-		url     => "http://www.webgui.org/addons",
-	      title   => "^International(Addons title,WebGUI);"	
-	};
-	$session->config->set('adminConsole',$adminConsole);
+    my $session = shift;
+    print "\tInternationalize the text of the addons link in the adminconsole... " unless $quiet;
+    $session->config->set('adminConsole/addons',
+        {
+            icon    => "addons.png",
+            uiLevel => 1,
+            group   => "12",
+            url     => "http://www.webgui.org/addons",
+            title   => "^International(Addons title,WebGUI);"	
+        }
+    );
+    print "DONE!\n" unless $quiet;
 }
+#----------------------------------------------------------------------------
+# Describe what our function does
+sub removeBadSpanishFile {
+    my $session = shift;
+    print "\tRemove a bad Spanish translation file... " unless $quiet;
+    use File::Spec;
+    unlink File::Spec->catfile($webguiRoot, qw/lib WebGUi i18n Spanish .pm/);
+    # and here's our code
+    print "DONE!\n" unless $quiet;
+}
+
+#----------------------------------------------------------------------------
+# Repack all templates since the packed columns may have been wiped out due to the bug.
+sub repackTemplates {
+    my $session = shift;
+
+    print "\tRepacking all templates, this may take a while..." unless $quiet;
+    my $sth = $session->db->read( "SELECT assetId, revisionDate FROM template" );
+    while ( my ($assetId, $revisionDate) = $sth->array ) {
+        my $asset       = WebGUI::Asset->newByDynamicClass( $session, $assetId, $revisionDate );
+        next unless $asset;
+        $asset->update({
+            template        => $asset->get('template'),
+        });
+    }
+    print "DONE!\n" unless $quiet;
+
+    print "\tRepacking head tags in all assets, this may take a while..." unless $quiet;
+    $sth = $session->db->read( "SELECT assetId, revisionDate FROM assetData where usePackedHeadTags=1" );
+    while ( my ($assetId, $revisionDate) = $sth->array ) {
+        my $asset       = WebGUI::Asset->newByDynamicClass( $session, $assetId, $revisionDate );
+        next unless $asset;
+        $asset->update({
+            extraHeadTags       => $asset->get('extraHeadTags'),
+        });
+    }
+    print "DONE!\n" unless $quiet;
+
+    print "\tRepacking all snippets, this may take a while..." unless $quiet;
+    $sth = $session->db->read( "SELECT assetId, revisionDate FROM snippet" );
+    while ( my ($assetId, $revisionDate) = $sth->array ) {
+        my $asset       = WebGUI::Asset->newByDynamicClass( $session, $assetId, $revisionDate );
+        next unless $asset;
+        $asset->update({
+            snippet         => $asset->get('snippet'),
+        });
+    }
+
+    print "DONE!\n" unless $quiet;
+}
+
+
 #----------------------------------------------------------------------------
 # Describe what our function does
 #sub exampleFunction {
@@ -140,6 +196,7 @@ sub start {
 sub finish {
     my $session = shift;
     updateTemplates($session);
+    repackTemplates( $session );
     my $versionTag = WebGUI::VersionTag->getWorking($session);
     $versionTag->commit;
     $session->db->write("insert into webguiVersion values (".$session->db->quote($toVersion).",'upgrade',".time().")");

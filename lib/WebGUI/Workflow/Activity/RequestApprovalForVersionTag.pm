@@ -17,6 +17,7 @@ package WebGUI::Workflow::Activity::RequestApprovalForVersionTag;
 
 use strict;
 use base 'WebGUI::Workflow::Activity';
+use WebGUI::Asset;
 use WebGUI::VersionTag;
 use WebGUI::Inbox;
 use WebGUI::International;
@@ -40,6 +41,23 @@ See WebGUI::Workflow::Activity for details on how to use any activity.
 These methods are available from this class:
 
 =cut
+
+#-------------------------------------------------------------------
+
+=head2 cleanup ( )
+
+Override this activity to add a cleanup routine to be run if an instance
+is deleted with this activity currently in a waiting state.  This is a stub
+and will do nothing unless overridden.
+
+=cut
+
+sub cleanup {
+	my $self     = shift;
+	my $instance = shift;
+    $self->setMessageCompleted($instance);
+	return 1;
+}
 
 #-------------------------------------------------------------------
 
@@ -86,6 +104,13 @@ sub definition {
                 hoverHelp       => $i18n->get("do on approve help"),
                 none            => 1,
                 noneLabel       => $i18n->get('continue with workflow'),
+            },
+			templateId => {
+				fieldType    =>"template",
+				defaultValue => "lYhMheuuLROK_iNjaQuPKg",
+                namespace    => 'NotifyAboutVersionTag',
+				label        => $i18n->get("email template", 'Workflow_Activity_NotifyAboutVersionTag'),
+				hoverHelp    => $i18n->get("email template help", 'Workflow_Activity_NotifyAboutVersionTag')
             },
         },
     };
@@ -265,13 +290,13 @@ sub sendMessage {
             "op=manageRevisionsInTag;workflowInstanceId=" . $instance->getId
             . ";tagId=" . $versionTag->getId
         );
-    my $messageText 
-        = join "\n\n",
-            $self->get("message"),
-            sprintf('<a href="%s">%s</a>', $approvalUrl, $approvalUrl,),
-            $versionTag->get("comments"),
-        ;
-
+    my $var = {
+        message  => $self->get('message'),
+        comments => $versionTag->get('comments'),
+        url      => $approvalUrl,
+    };
+    my $template     = WebGUI::Asset->newByDynamicClass($self->session, $self->get('templateId'));
+    my $messageText  = $template->process($var);
     for my $groupId ( @{ $self->getGroupToApprove } ) {
         my $message 
             = $inbox->addMessage({

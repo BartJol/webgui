@@ -7,9 +7,38 @@ upgrading from one version to the next, or even between multiple
 versions. Be sure to heed the warnings contained herein as they will
 save you many hours of grief.
 
+7.10.4
+--------------------------------------------------------------------
+    * WebGUI now depends on Monkey::Patch for doing sanely scoped
+      monkeypatches.
+
+7.10.3
+--------------------------------------------------------------------
+     * In the Collaboration System, previously the Group to Post group
+       was also allowed to view the CS.  This made it difficult to
+       make the CS not viewable to regular users, so the behavior was
+       removed in 7.10.3.  If your site depended on the Group To Post being
+       able to view the CS, then make the it a sub-group of Group To View.
+
+7.10.2
+--------------------------------------------------------------------
+     * The URL used by Display Message on Login always returns the user to 
+       the page where they logged in.  If your site depended on the old,
+       buggy behavior of returning the user to the home page after showing
+       a message, then in the Settings you can assign Redirect After Login Url
+       to /.
+
+     * The UKPLayer - a slideshow that displays images as a movie - 
+       is in WebGUI again. Licencing information was overlooked. An 
+       upgrade to 7.10.1 will break the Matrix. This is fixed now.
+
 7.10.1
 --------------------------------------------------------------------
      * WebGUI now depends on PerlIO::eol, for doing line ending translation.
+
+     * The UK Flash player has been removed due to licensing issues with Debian
+       and the GPL.  If you need this functionality, try using the Carousel
+       Asset instead.
 
 7.10.0
 --------------------------------------------------------------------

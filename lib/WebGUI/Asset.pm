@@ -37,6 +37,9 @@ use WebGUI::HTML;
 use WebGUI::HTMLForm;
 use WebGUI::Keyword;
 use WebGUI::ProgressBar;
+use WebGUI::ProgressTree;
+use Monkey::Patch;
+use WebGUI::Fork;
 use WebGUI::Search::Index;
 use WebGUI::TabForm;
 use WebGUI::Utility;
@@ -832,6 +835,58 @@ sub fixUrlFromParent {
     return $url;
 }
 
+#-------------------------------------------------------------------
+
+=head2 forkWithStatusPage ($args)
+
+Kicks off a WebGUI::Fork running $method with $args (from the args hashref)
+and redirects to a ProgressTree status page to show the progress. The
+following arguments are required in $args:
+
+=head3 method
+
+The name of the WebGUI::Asset method to call
+
+=head3 args
+
+The arguments to pass that method (see WebGUI::Fork)
+
+=head3 plugin
+
+The WebGUI::Operation::Fork plugin to render (e.g. ProgressTree)
+
+=head3 title
+
+An key in Asset's i18n hash for the title of the rendered console page
+
+=head3 redirect
+
+The full url to redirect to after the fork has finished.
+
+=cut
+
+sub forkWithStatusPage {
+    my ( $self, $args ) = @_;
+    my $session = $self->session;
+
+    my $process = WebGUI::Fork->start( $session, 'WebGUI::Asset', $args->{method}, $args->{args} );
+
+    if ( my $groupId = $args->{groupId} ) {
+        $process->setGroup($groupId);
+    }
+
+    my $method = $session->form->get('proceed') || 'manageTrash';
+    my $i18n = WebGUI::International->new( $session, 'Asset' );
+    my $pairs = $process->contentPairs(
+        $args->{plugin}, {
+            title   => $i18n->get( $args->{title} ),
+            icon    => 'assets',
+            proceed => $args->{redirect} || '',
+        }
+    );
+    $session->http->setRedirect( $self->getUrl($pairs) );
+    return 'redirect';
+} ## end sub forkWithStatusPage
 
 #-------------------------------------------------------------------
 
@@ -2256,7 +2311,6 @@ sub packExtraHeadTags {
     return $unpacked if !$unpacked;
     my $packed  = $unpacked;
     HTML::Packer::minify( \$packed, {
-        remove_comments     => 1,
         remove_newlines     => 1,
         do_javascript       => "shrink",
         do_stylesheet       => "minify",
@@ -2556,6 +2610,33 @@ sub setSize {
     $self->{_properties}{assetSize} = $size;
 }
 	
+#-------------------------------------------------------------------
+
+=head2 setState ( $state )
+
+Updates the asset table with the new state of the asset.
+
+=cut
+
+sub setState {
+    my ($self, $state) = @_;
+    my $sql = q{
+        UPDATE asset
+        SET    state          = ?,
+               stateChangedBy = ?,
+               stateChanged   = ?
+        WHERE  assetId = ?
+    };
+    my @props = ($state, $self->session->user->userId, time);
+    $self->session->db->write(
+        $sql, [
+            @props,
+            $self->getId,
+        ]
+    );
+    @{$self->{_properties}}{qw(state stateChangedBy stateChanged)} = @props;
+    $self->purgeCache;
+}
 
 #-------------------------------------------------------------------
 
@@ -2843,7 +2924,7 @@ sub www_changeUrl {
 	my $i18n = WebGUI::International->new($self->session, "Asset");
 	my $f = WebGUI::HTMLForm->new($self->session, action=>$self->getUrl);
 	$f->hidden(name=>"func", value=>"changeUrlConfirm");
-	$f->hidden(name=>"proceed", value=>$self->session->form->param("proceed"));
+	$f->hidden(name=>"proceed", value=>scalar($self->session->form->param("proceed")));
 	$f->text(name=>"url", value=>$self->get('url'), label=>$i18n->get("104"), hoverHelp=>$i18n->get('104 description'));
 	$f->yesNo(name=>"confirm", value=>0, label=>$i18n->get("confirm change"), hoverHelp=>$i18n->get("confirm change url message"), subtext=>'<br />'.$i18n->get("confirm change url message"));
 	$f->submit;
