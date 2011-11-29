@@ -232,7 +232,7 @@ sub dbSlave {
             $self->{_slave} = WebGUI::SQL->connect($self, $slave->{dsn},$slave->{user},$slave->{pass});
         }
 	}
-    if (!exists $self->{_slave}) {
+    if (!exists $self->{_slave} || $self->{_slave} == undef ) {
         return $self->db;
     }
     else {
