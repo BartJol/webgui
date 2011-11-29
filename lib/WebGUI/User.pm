@@ -27,6 +27,7 @@ use WebGUI::Shop::Credit;
 use JSON;
 use WebGUI::Exception;
 use WebGUI::ProfileField;
+use List::MoreUtils qw( any );
 use Scalar::Util qw( weaken );
 
 =head1 NAME
@@ -380,7 +381,6 @@ sub delete {
     my $userId  = $self->userId;
     my $session = $self->session;
     my $db      = $session->db;
-    $self->uncache;
 
     foreach my $groupId ( @{ $self->getGroups } ) {
         my $group = WebGUI::Group->new($session, $groupId);
@@ -429,6 +429,7 @@ sub delete {
     $credit->purge;
 
     # remove user itself
+    $self->uncache;
     $db->write("DELETE FROM userProfileData WHERE userId=?",[$userId]);
     $db->write("DELETE FROM users WHERE userId=?",[$userId]);
 }
@@ -683,8 +684,9 @@ sub getGroupIdsRecursive {
     my $self        = shift;
     my $groupingIds = $self->getGroups( "withoutExpired" );
     my %groupIds    = map { $_ => 1 } @{ $groupingIds };
-    while ( my $groupingId = shift @{ $groupingIds } ) {
+    GROUPINGID: while ( my $groupingId = shift @{ $groupingIds } ) {
         my $group   = WebGUI::Group->new( $self->session, $groupingId );
+        next GROUPINGID unless $group;
         for my $groupGroupingId ( @{ $group->getGroupsFor } ) { 
             if ( !$groupIds{ $groupGroupingId } ) {
                 push @{ $groupingIds }, $groupGroupingId;
@@ -779,7 +781,7 @@ Field to get privacy setting for.
 sub getProfileFieldPrivacySetting {
     my $self      = shift;
     my $session   = $self->session;
-    my $field     = shift;
+    my $fieldId   = shift;
 
     unless ($self->{_privacySettings}) {
         #Look it up manually because we want to cache this separately.
@@ -791,12 +793,16 @@ sub getProfileFieldPrivacySetting {
         $self->{_privacySettings} = JSON->new->decode($privacySettings);
     }
     
-    return $self->{_privacySettings} unless ($field);
+    return $self->{_privacySettings} unless ($fieldId);
 
     #No privacy settings returned the privacy setting field
-    return "none" if($field eq "wg_privacySettings");
+    return "none" if($fieldId eq "wg_privacySettings");
 
-    return $self->{_privacySettings}->{$field};
+    if (exists $self->{_privacySettings}->{$fieldId}) {
+        return $self->{_privacySettings}->{$fieldId};
+    }
+    my $field = WebGUI::ProfileField->new($session, $fieldId);
+    return $field && $field->get('defaultPrivacySetting');
 }   
 
 
@@ -892,6 +898,25 @@ sub isAdmin {
 
 #-------------------------------------------------------------------
 
+=head2 isDuplicateEmail( email )
+
+Returns true if the email passed is also being used by any other user
+
+=cut
+
+sub isDuplicateEmail {
+    my ( $self, $email ) = @_;
+
+    my @userIds = $self->session->db->quickArray(
+        "SELECT userId FROM userProfileData WHERE email = ?",
+        [ $email ],
+    );
+
+    return any { $_ ne $self->userId } @userIds;
+}
+
+#-------------------------------------------------------------------
+
 =head2 isEnabled ()
 
 Returns 1 if the user is enabled.
@@ -929,21 +954,17 @@ sub isInGroup {
 	### Check stow before we check the cache.  Stow is in memory and much faster
 	my $stow          = $session->stow->get("isInGroup", { noclone => 1 }) || {};
 	return $stow->{$uid}->{$gid} if (exists $stow->{$uid}->{$gid});
-	
+
 	### Don't bother checking File Cache if we already have a stow for this group.
 	### We can find what we need there and save ourselves a bunch of time
-	my $cache        = undef;
-	my $groupMembers = undef;
-	unless ($stow->{$uid}->{$gid}) {
-		$cache         = WebGUI::Cache->new($session,["groupMembers",$gid]);
-		$groupMembers  = $cache->get || {};
-		#If we have this user's membership cached, return what we have stored
-		if (exists $groupMembers->{$uid}) {
-			return $groupMembers->{$uid}->{isMember} if (!$self->isVisitor);
-			return $groupMembers->{$uid}->{$session->getId}->{isMember} #Include the session check for visitors
-		}
-	}
-	
+    my $cache         = WebGUI::Cache->new($session,["groupMembers",$gid]);
+    my $groupMembers  = $cache->get || {};
+    #If we have this user's membership cached, return what we have stored
+    if (exists $groupMembers->{$uid}) {
+        return $groupMembers->{$uid}->{isMember} if (!$self->isVisitor);
+        return $groupMembers->{$uid}->{$session->getId}->{isMember} if exists $groupMembers->{$uid}->{$session->getId}; #Include the session check for visitors
+    }
+
  	### Instantiate the group
     my $group = WebGUI::Group->new($session,$gid);
 	if ( !$group ) {
@@ -953,7 +974,7 @@ sub isInGroup {
 
 	#Check the group for membership
 	my $isInGroup = $group->hasUser($self);
-	
+
 	#Write what we found to file cache
 	$group->cacheGroupings( $self, $isInGroup, $cache, $groupMembers );
 	return $isInGroup;
@@ -1397,27 +1418,28 @@ sub update {
     delete $properties->{wg_privacySettings};
 
     # $self->{_user} contains all fields in `users` table
-    my @userFields  = ();
-    my @userValues  = ();
+    my @userFields = ();
+    my @userValues = ();
     for my $key ( keys %{$self->{_user}} ) {
         if ( exists $properties->{$key} ) {
             # Delete the value because it's not a profile field
-            my $value   = delete $properties->{$key};
+            my $value = delete $properties->{$key};
             push @userFields, $db->dbh->quote_identifier( $key ) . " = ?";
             push @userValues, $value;
             $self->{_user}->{$key} = $value;
         }
     }
     # No matter what we update properties
-    my $userFields  = join ", ", @userFields;
+    my $userFields = join ", ", @userFields;
     $db->write(
         "UPDATE users SET $userFields WHERE userId=?",
         [@userValues, $self->{_userId}]
     );
 
     # Everything else must be a profile field
-    my @profileFields   = ();
-    my @profileValues   = ();
+    my @profileFields = ();
+    my @profileValues = ();
+
     for my $key ( keys %{$properties} ) {
         if (!exists $self->{_profile}{$key} && !WebGUI::ProfileField->exists($session,$key)) {
             $self->session->errorHandler->warn("No such profile field: $key");
@@ -1428,7 +1450,7 @@ sub update {
         $self->{_profile}->{$key} = $properties->{ $key };
     }
     if ( @profileFields ) {
-        my $profileFields  = join ", ", @profileFields;
+        my $profileFields = join ", ", @profileFields;
         $db->write(
             "UPDATE userProfileData SET $profileFields WHERE userId=?",
             [@profileValues, $self->{_userId}]
@@ -1548,7 +1570,7 @@ sub validateProfileDataFromForm {
             push(@{$errorFields},$fieldId);
         }
         #Duplicate emails throw warnings
-        elsif($fieldId eq "email" && $field->isDuplicate($fieldValue,$self->userId)) {
+        elsif($fieldId eq "email" && $self->isDuplicateEmail($fieldValue)) {
             $errorCat = $field->get("profileCategoryId") unless (defined $errorCat);
             push (@{$warnings},$i18n->get(1072));
             push(@{$warnFields},$fieldId);

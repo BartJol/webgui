@@ -226,6 +226,10 @@ The "turn admin on" group which is group id 12.
 
 sub canAdd {
     my $className = shift;
+
+    # just in case we get called as object method
+    $className = $className->get('className') if blessed $className;
+
     my $session = shift;
     my $userId = shift || $session->user->userId;
     my $user = WebGUI::User->new($session, $userId);
@@ -1222,7 +1226,8 @@ sub setupFormField {
     my $overrideTab = delete $overrideParams{tab};
     $tab = $overrideTab if defined $overrideTab;
     foreach my $key (keys %overrideParams) {
-      $params{"-$key"} = $overrideParams{$key};
+      (my $canon = $key) =~ s/^-//;
+      $params{$canon} = $overrideParams{$key};
     }
   }
 
@@ -1823,6 +1828,19 @@ sub getContentLastModified {
 
 #-------------------------------------------------------------------
 
+=head2 getContentLastModifiedBy ( )
+
+Returns the userId that modified the content last.
+
+=cut
+
+sub getContentLastModifiedBy {
+        my $self = shift;
+        return $self->get("revisedBy");
+}
+
+#-------------------------------------------------------------------
+
 =head2 getValue ( key )
 
 Tries to look up C<key> in the asset object's property cache.  If it can't find it in there, then it
@@ -2308,7 +2326,11 @@ filter guidelines).
 
 sub packExtraHeadTags {
     my ( $self, $unpacked ) = @_;
-    return $unpacked if !$unpacked;
+    # If no more unpacked tags, remove the packed tags
+    if ( !$unpacked ) {
+        $self->update({ extraHeadTagsPacked => $unpacked });
+        return;
+    }
     my $packed  = $unpacked;
     HTML::Packer::minify( \$packed, {
         remove_newlines     => 1,
@@ -2464,6 +2486,7 @@ sub processTemplate {
             %{$self->{_properties}},
             'title'     => $self->getTitle,
             'menuTitle' => $self->getMenuTitle,
+            'keywords'  => $self->get('keywords'),
             %{$var},
         );
         return $template->process(\%vars);
@@ -2568,6 +2591,21 @@ sub purgeCache {
 	$stow->delete('assetClass');
 	$stow->delete('assetRevision');
 	WebGUI::Cache->new($self->session,["asset",$self->getId,$self->get("revisionDate")])->deleteChunk(["asset",$self->getId]);
+}
+
+
+#-------------------------------------------------------------------
+
+=head2 refused ( )
+
+Returns an error message to the user, wrapped in the user's style.  This is most useful for
+handling UI errors.  Privilege errors should be still be sent to $session->privilege.
+
+=cut
+
+sub refused {
+	my ($self) = @_;
+	return $self->{_session};
 }
 
 
@@ -2853,20 +2891,51 @@ sub view {
 
 =head2 www_add ( )
 
-Adds a new Asset based upon the class of the current form. Returns the Asset calling method www_edit();  The
-new Asset will inherit security and style properties from the current asset, the parent.
+Create a new, unsaved asset with a parent of this asset from C<class>, C<url>, and optional C<prototype> parameters and present the
+edit screen for it.
+Calls C<get_add_instance> to configure the new asset; the default implementation inherits security and 
+style properties from the current asset, the parent.
 
 =cut
 
 sub www_add {
 	my $self = shift;
-	my %prototypeProperties;
     my $class = $self->loadModule($self->session, $self->session->form->process("class","className"));
+	my $prototype = $self->session->form->process('prototype');
+    my $url = scalar($self->session->form->param("url"));
+
     return undef unless (defined $class);
 	return $self->session->privilege->insufficient() unless ($class->canAdd($self->session));
-	if ($self->session->form->process('prototype')) {
-		my $prototype = WebGUI::Asset->new($self->session, $self->session->form->process("prototype"),$class);
-		foreach my $definition (@{$prototype->definition($self->session)}) { # cycle through rather than copying properties to avoid grabbing stuff we shouldn't grab
+
+    my $newAsset = $class->get_add_instance( $self->session, $self, $url, $prototype );
+
+	$newAsset->{_parent} = $self;
+	return $newAsset->www_edit();
+}
+
+#-------------------------------------------------------------------
+
+=head2 get_add_instance ( $session, $parentAsset, $url, $prototype )
+
+Class method.
+Called from C<www_add> by the parent asset on the class of the new asset being constructed.
+Configures the new asset with defaults, including inheriting security and style properties from the current asset.
+C<$prototype> is the optional assetId of an asset to initialize the new asset from.
+
+=cut
+
+sub get_add_instance {
+    my $class = shift;
+    my $session = shift;
+    my $parentAsset = shift;
+    my $url = shift;
+    my $prototype = shift;
+
+	my %prototypeProperties;
+
+	if ($prototype) {
+		my $prototype = WebGUI::Asset->new($session, $prototype, $class);
+		foreach my $definition (@{$prototype->definition($session)}) { # cycle through rather than copying properties to avoid grabbing stuff we shouldn't grab
 			foreach my $property (keys %{$definition->{properties}}) {
 				next if (isIn($property,qw(title menuTitle url isPrototype isPackage)));
 				next if ($definition->{properties}{$property}{noFormPost});
@@ -2874,24 +2943,25 @@ sub www_add {
 			}
 		}
 	}
-	my %properties = (
-		%prototypeProperties,
-		parentId => $self->getId,
-		groupIdView => $self->get("groupIdView"),
-		groupIdEdit => $self->get("groupIdEdit"),
-		ownerUserId => $self->get("ownerUserId"),
-		encryptPage => $self->get("encryptPage"),
-		styleTemplateId => $self->get("styleTemplateId"),
-		printableStyleTemplateId => $self->get("printableStyleTemplateId"),
-		isHidden => $self->get("isHidden"),
-		className=>$class,
-		assetId=>"new",
-		url=>scalar($self->session->form->param("url")),
-		);
-	$properties{isHidden} = 1 unless $self->session->config->get("assets/".$class."/isContainer");
-	my $newAsset = WebGUI::Asset->newByPropertyHashRef($self->session,\%properties);
-	$newAsset->{_parent} = $self;
-	return $newAsset->www_edit();
+
+    my %properties = (
+        %prototypeProperties,
+        parentId                 => $parentAsset->getId,
+        groupIdView              => $parentAsset->get("groupIdView"),
+        groupIdEdit              => $parentAsset->get("groupIdEdit"),
+        ownerUserId              => $parentAsset->get("ownerUserId"),
+        encryptPage              => $parentAsset->get("encryptPage"),
+        styleTemplateId          => $parentAsset->get("styleTemplateId"),
+        printableStyleTemplateId => $parentAsset->get("printableStyleTemplateId"),
+        isHidden                 => $parentAsset->get("isHidden"),
+        className                => $class,
+        assetId                  => "new",
+        url                      => $url,
+    );
+    $properties{isHidden} = 1 unless $session->config->get("assets/".$class."/isContainer");
+
+    return WebGUI::Asset->newByPropertyHashRef($session, \%properties);
+
 }
 
 #-------------------------------------------------------------------
@@ -2995,14 +3065,16 @@ sub www_editSave {
     my $isNewAsset = $session->form->process("assetId") eq "new" ? 1 : 0;
     return $session->privilege->locked() if (!$self->canEditIfLocked and !$isNewAsset);
     return $session->privilege->insufficient() unless $self->canEdit && $session->form->validToken;
-    if ($self->session->config("maximumAssets")) {
+    if ($self->session->config->get("maximumAssets")) {
         my ($count) = $self->session->db->quickArray("select count(*) from asset");
         my $i18n = WebGUI::International->new($self->session, "Asset");
-        return $self->session->style->userStyle($i18n->get("over max assets")) if ($self->session->config("maximumAssets") <= $count);
+        return $self->session->style->userStyle($i18n->get("over max assets")) if ( $self->session->config->get("maximumAssets") <= $count && $isNewAsset );
     }
     my $object;
     if ($isNewAsset) {
-        $object = $self->addChild({className=>$session->form->process("class","className")});	
+        my $className = $session->form->process("class","className");
+        return $session->privilege->insufficient() if ($isNewAsset && !$className->canAdd($session));
+        $object = $self->addChild({className=> $className});	
         return $self->www_view unless defined $object;
         $object->{_parent} = $self;
         $object->{_properties}{url} = undef;

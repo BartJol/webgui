@@ -281,6 +281,24 @@ sub definition {
 
 #-------------------------------------------------------------------
 
+=head2 deleteThingIndex ( $thingId )
+
+Remove the entry about this Thing from the database, and for any rows for it that are indexed as well.
+
+=head3 $thingId
+
+The GUID of the Thing, used to pick out this record in the database.
+
+=cut
+
+sub deleteThingIndex {
+	my $self    = shift;
+    my $thingId = shift;
+    $self->session->db->write(q|delete from assetIndex where assetId=? and subId like CONCAT(?,'%')|,[$self->getId, $thingId]);
+}
+
+#-------------------------------------------------------------------
+
 =head2 duplicate ( )
 
 Duplicates a Thingy, including the definitions of the Things in this Thingy and their fields.
@@ -367,6 +385,8 @@ sub duplicateThing {
         $self->addField($field,0);
     }
 
+    $thingProperties->{thingId} = $newThingId;
+    $self->indexThing($thingProperties);
     return $newThingId;
 
 }
@@ -418,6 +438,7 @@ sub deleteField {
         $db->write("ALTER TABLE ".$db->dbh->quote_identifier("Thingy_".$thingId)." DROP "
             .$db->dbh->quote_identifier("field_".$fieldId));
     }
+    $self->reindexThings;
     $error->info("Deleted field: $fieldId in thing: $thingId.");
     return undef;
 }
@@ -454,7 +475,7 @@ sub copyThingData {
     my @storage_field_ids = ();
     ##Check to see if any of them are File or Image
     foreach my $field (@{ $fields }) {
-        if ($field->{fieldType} eq 'File' or $field->{fieldType} eq 'Image') {
+        if ($self->field_isa($field->{fieldType}, 'WebGUI::Form::File')) {
             push @storage_field_ids, $field->{fieldId};
         }
     }
@@ -468,6 +489,7 @@ sub copyThingData {
     }
     ##Update the copy
     $self->setCollateral("Thingy_".$thingId, "thingDataId", $origCollateral, 0, 0);
+    $self->indexThingData($thingId, $origCollateral);
 
     return undef;
 }
@@ -512,7 +534,7 @@ sub deleteThingData {
     my @storage_field_ids = ();
     ##Check to see if any of them are File or Image
     foreach my $field (@{ $fields }) {
-        if ($field->{fieldType} eq 'File' or $field->{fieldType} eq 'Image') {
+        if ($self->field_isa($field->{fieldType}, 'WebGUI::Form::File')) {
             push @storage_field_ids, $field->{fieldId};
         }
     }
@@ -522,7 +544,26 @@ sub deleteThingData {
         $storage->delete;
     }
 
+    $self->deleteThingDataIndex($thingDataId);
     return undef;
+}
+
+#-------------------------------------------------------------------
+
+=head2 deleteThingDataIndex ( $thingDataId )
+
+Remove the entry about this Thing from the database, and for any rows for it that are indexed as well.
+
+=head3 $thingDataId
+
+The GUID of the thingData to remove, used to pick out this record in the database.
+
+=cut
+
+sub deleteThingDataIndex {
+	my $self        = shift;
+    my $thingDataId = shift;
+    $self->session->db->write(q|delete from assetIndex where assetId=? and subId like CONCAT('%-',?)|,[$self->getId, $thingDataId]);
 }
 
 #-------------------------------------------------------------------
@@ -549,6 +590,7 @@ sub deleteThing {
     $session->db->write("drop table if exists ".$session->db->dbh->quote_identifier("Thingy_".$thingId));
     
     $error->info("Deleted thing: $thingId.");
+    $self->deleteThingIndex($thingId);
     return undef;
 }
 
@@ -556,7 +598,9 @@ sub deleteThing {
 
 =head2 editThingDataSave ( )
 
-Saves a row of thing data and triggers the appropriate workflow triggers.
+Saves a row of thing data and triggers the appropriate workflow triggers.  Returns the id of the row created in
+the database, and an array reference of errors from required fields and other sources.  In there are errors, no data
+is saved in the database, and the id returned in the empty string.
 
 =head3 thingId
 
@@ -600,8 +644,7 @@ sub editThingDataSave {
         lastUpDated=>time(),
     );
     
-    $fields = $session->db->read('select * from Thingy_fields where assetId = ? and thingId = ? order by sequenceNumber',
-        [$self->get("assetId"),$thingId]);
+    $fields = $self->getFields($thingId);
     while (my $field = $fields->hashRef) {
         my $fieldName = 'field_'.$field->{fieldId};
         my $fieldValue;
@@ -610,16 +653,19 @@ sub editThingDataSave {
             $fieldType = "" if ($fieldType =~ m/^otherThing/x);
             # Modify the defaultValue for certain field types. For most types we want to use
             # the default in the database, for these we want the last known value for this thingData
-            if ( $fieldType eq "File" || $fieldType eq "Image" ) {
+            if ($self->field_isa($fieldType, 'WebGUI::Form::File')) {
                 $field->{ defaultValue } = $thingData{ "field_" . $field->{ fieldId } };
+            }
+            elsif ($fieldType eq 'Date' or $fieldType eq 'DateTime') {  ##Must be in epoch format to be stored in the db.
+                my $wdt = WebGUI::DateTime->new($session, $field->{defaultValue})->cloneToUserTimeZone;
+                $field->{defaultValue} = $wdt->epoch;
             }
             $fieldValue = $thingData->{$fieldName} || $session->form->process($fieldName,$fieldType,$field->{defaultValue},$field);
         }
         if ($field->{status} eq "required" && ($fieldValue =~ /^\s$/x || $fieldValue eq "" || !(defined $fieldValue))) {
             push (@errors,{
-                "error_message"=>$field->{label}." ".$i18n->get('is required error').".",
+		"error_message"=>$field->{label}." ".$i18n->get('is required error').".", "field_name"=>$fieldName,
                 });
-            #$hadErrors = 1;
         }
         if ($field->{status} eq "hidden") {
             $fieldValue = $field->{defaultValue};
@@ -629,10 +675,25 @@ sub editThingDataSave {
             $fieldValue = $field->{defaultValue};
             #WebGUI::Macro::process($self->session,\$fieldValue);
         }
+
+	if ($field->{isUnique}) {
+
+             unless ( $self->isUniqueEntry($thingId,$fieldName,$fieldValue,$thingDataId)) {
+               push (@errors,{
+                "error_message"=>$field->{label}. $i18n->get('needs to be unique error'),"field_name"=>$fieldName,
+                });
+             }
+	}
+
+
         $thingData{$fieldName} = $fieldValue;
     }
 
+    if (@errors) {
+        return ('', \@errors);
+    }
     $newThingDataId = $self->setCollateral("Thingy_".$thingId,"thingDataId",\%thingData,0,0);
+    $self->indexThingData($thingId, \%thingData);
 
     # trigger workflow
     if($thingDataId eq "new"){
@@ -670,6 +731,33 @@ sub exportAssetData {
     $data->{fields} = $db->buildArrayRefOfHashRefs('select * from Thingy_fields where assetId = ?',[$assetId]);
 
     return $data;
+}
+
+#-------------------------------------------------------------------
+
+=head2 field_isa ( $fieldType, $isa )
+
+Builds a form field and does an isa check on it.
+
+=head2 $fieldType
+
+This is the type of a field to build.  It will have 'WebGUI::Form' prepended to it to form
+a complete classname.
+
+=head2 $isa
+
+This is the class name to check against.
+
+=cut
+
+sub field_isa {
+    my $self      = shift;
+    my $session   = $self->session;
+    my $fieldType = shift;
+    my $isa       = shift;
+    $fieldType    = ucfirst $fieldType;
+    my $control   = eval { WebGUI::Pluggable::instanciate("WebGUI::Form::".$fieldType, "new", [ $session, () ]) };
+    return ($control && $control->isa($isa));
 }
 
 #-------------------------------------------------------------------
@@ -782,7 +870,17 @@ sub getEditFieldForm {
         -value=>$field->{fieldType} || "Text",
         -options=>\%fieldTypes,
         -id=>$dialogPrefix."_fieldType_formId",
-        );
+    );
+
+    $f->yesNo(
+        -name=>'isUnique',
+        -label=>$i18n->get('unique label'),
+        -hoverHelp=>$i18n->get('unique description'),
+        -value=>$field->{isUnique},
+        -id=>$dialogPrefix."_isUnique_formId",
+    );
+
+
     $f->raw($self->getHtmlWithModuleWrapper($dialogPrefix."_fieldInThing_module"));
 
     $f->raw($self->getHtmlWithModuleWrapper($dialogPrefix."_defaultFieldInThing_module"));
@@ -909,6 +1007,23 @@ sub getEditForm {
 
 #-------------------------------------------------------------------
 
+=head2 getFields  ( $thingId )
+
+Returns a result set with all the fields in a thing in this Thingy.
+
+=head3 $thingId
+
+The GUID for a thing
+
+=cut
+
+sub getFields {
+    my ($self, $thingId) = @_;
+    return $self->session->db->read("select * from Thingy_fields where assetId=? and thingId=? order by sequenceNumber",[$self->getId, $thingId]);
+}
+
+#-------------------------------------------------------------------
+
 =head2 getFieldValue ( value, field )
 
 Processes the field value for date(Time) fields and Other Thing fields.
@@ -931,18 +1046,22 @@ sub getFieldValue {
     my $dateFormat = shift || "%z";
     my $dateTimeFormat = shift;
     my $processedValue = $value;    
-    my $dbh = $self->session->db->dbh;
+    my $session = $self->session;
+    my $dbh     = $session->db->dbh;
 
-    if (lc $field->{fieldType} eq "date"){
-        $processedValue = $self->session->datetime->epochToHuman($value,$dateFormat);
+    my $fieldType = lc $field->{fieldType};
+    if ($fieldType eq "date"){
+        my $wdt = WebGUI::DateTime->new($session, $value);
+        $processedValue = $wdt->cloneToUserTimeZone->webguiDate($dateFormat);
     }
-    elsif (lc $field->{fieldType} eq "datetime"){
-        $processedValue = $self->session->datetime->epochToHuman($value,$dateTimeFormat);
+    elsif ($fieldType eq "datetime"){
+        my $wdt = WebGUI::DateTime->new($session, $value);
+        $processedValue = $wdt->cloneToUserTimeZone->webguiDate($dateTimeFormat);
     }
     # TODO: The otherThing field type is probably also handled by getFormPlugin, so the elsif below can probably be
     # safely removed. However, this requires more testing than I can provide right now, so for now this stays the
     # way it was.
-    elsif ($field->{fieldType} =~ m/^otherThing/x) {
+    elsif ($fieldType =~ m/^otherthing/x) {
         my $otherThingId = $field->{fieldType};
         $otherThingId =~ s/^otherThing_//x;
         my $tableName = 'Thingy_'.$otherThingId;
@@ -1164,6 +1283,29 @@ sub getThing {
 
 #-------------------------------------------------------------------
 
+=head2 getThingUrl  ( thingData )
+
+Returns a the URL to view a Thing in this Thingy
+
+=head3 thingData
+
+A hashref of properties for the Thing, as returned by getThing.  This is needed to extract the defaultView,
+to get the right func, and the thingId.
+
+=cut
+
+sub getThingUrl {
+    my ($self, $thing) = @_;
+    if ($thing->{defaultView} eq "addThing") {
+        return 'func=editThingData;thingId='.$thing->{thingId}.';thingDataId=new';
+    }
+    else{
+        return 'func=search;thingId='.$thing->{thingId};
+    }
+}
+
+#-------------------------------------------------------------------
+
 =head2 getViewThingVars  (  )
 
 Returns the field values of a thing instance and the title for its view screen in a tmpl var hashref. 
@@ -1182,8 +1324,7 @@ sub getViewThingVars {
         ." where thingDataId = ?",[$thingDataId]);
 
     if (%thingData) {
-        my $fields = $db->read('select * from Thingy_fields where assetId = ? and thingId = ? order by sequenceNumber',
-            [$self->get('assetId'),$thingId]);
+        my $fields = $self->getFields($thingId);
         while (my %field = $fields->hash) {
             next unless ($field{display} eq '1');
             my $hidden = ($field{status} eq "hidden" && !$self->session->var->isAdminOn);
@@ -1218,6 +1359,7 @@ sub getViewThingVars {
             );
             push(@viewScreenTitleFields,$value) if ($field{viewScreenTitle});
             push(@field_loop, { map {("field_".$_ => $fieldProperties{$_})} keys(%fieldProperties) });
+            $var->{ $field{label} } = $value;
         }
         $var->{viewScreenTitle} = join(" ",@viewScreenTitleFields);
         $var->{field_loop} = \@field_loop;
@@ -1275,6 +1417,68 @@ sub hasEnteredMaxPerUser {
     }
 }
 
+
+#-------------------------------------------------------------------
+
+=head2 hasEnteredMaxEntries
+
+Check whether the the maximum number of entries allowed for this thing has been reached.
+
+=head3 thingId
+
+The unique id of a thing.
+
+=cut
+
+sub hasEnteredMaxEntries {
+    my ($self,$thingId) = @_;
+    my $session         = $self->session;
+    my $db       	= $session->db;
+
+    my $maxEntriesTotal = $db->quickScalar("select maxEntriesTotal from Thingy_things where thingId=?",[$thingId]);
+
+    return 0 unless $maxEntriesTotal;
+
+    my $numberOfEntries = $session->db->quickScalar("select count(*) "
+        ."from ".$session->db->dbh->quote_identifier("Thingy_".$thingId));
+
+    if($numberOfEntries < $maxEntriesTotal){
+        return 0;
+    }
+    else{
+        return 1;
+    }
+}
+
+
+
+
+#-------------------------------------------------------------------
+
+=head2 isUniqueEntry ( thingId,fieldName,fieldValue, thingDataId )
+
+Checks if the data entered in thingy record is unique
+
+=cut
+
+
+sub isUniqueEntry {
+
+   my ($self,$thingId,$fieldName,$fieldValue,$thingDataId) = @_;
+   my $session = $self->session;
+   my $db = $session->db;
+
+   my $nrOfEntries = $session->db->quickScalar("select count(*) "
+        ."from ".$session->db->dbh->quote_identifier("Thingy_".$thingId)." where " .
+        $session->db->dbh->quote_identifier($fieldName) ."=? and thingDataId !=?",[$fieldValue,$thingDataId]);
+   if ($nrOfEntries > 0) { return 0; }
+   return 1;
+}
+
+
+
+
+
 #-------------------------------------------------------------------
 
 =head2 hasPrivileges  ( groupId )
@@ -1314,10 +1518,6 @@ sub importAssetCollateralData {
     my $session = $self->session;
     my $error = $session->errorHandler;
     my $data = shift;
-    my $id = $data->{properties}{assetId};
-    my $class = $data->{properties}{className};
-    my $version = $data->{properties}{revisionDate};
-    my $assetExists = WebGUI::Asset->assetExists($self->session, $id, $class, $version);
     
     $error->info("Importing Things for Thingy ".$data->{properties}{title});
     my @importThings;
@@ -1325,7 +1525,7 @@ sub importAssetCollateralData {
         push(@importThings,$thing->{thingId});
         my ($thingIdExists) = $session->db->quickArray("select thingId from Thingy_things where thingId = ?",
             [$thing->{thingId}]);
-        if ($assetExists && $thingIdExists){
+        if ($thingIdExists){
             # update existing thing
             $error->info("Updating Thing, label: ".$thing->{label}.", id: ".$thing->{thingId});
             $self->setCollateral("Thingy_things","thingId",$thing,0,0);
@@ -1334,6 +1534,7 @@ sub importAssetCollateralData {
             # add new thing
             $self->addThing($thing,1);
         }
+        $self->indexThing($thing);
     }
     # delete deleted things
     my $thingsInDatabase = $self->getThings;
@@ -1349,7 +1550,7 @@ sub importAssetCollateralData {
         push(@importFields,$field->{fieldId});
         my $dbDataType = $self->_getDbDataType($field->{fieldType});
         my ($fieldIdExists) = $session->db->quickArray("select fieldId from Thingy_fields where fieldId = ? and thingId = ? ",[$field->{fieldId},$field->{thingId}]);
-        if ($assetExists && $fieldIdExists){
+        if ($fieldIdExists){
             # update existing field
             $error->info("Updating Field, label: ".$field->{label}.", id: ".$field->{fieldId}.",seq :"
                 .$field->{sequenceNumber});
@@ -1372,6 +1573,126 @@ sub importAssetCollateralData {
     }
 
     return undef;
+}
+
+
+#-------------------------------------------------------------------
+
+=head2 indexContent ( )
+
+Extend the base class to handle reindexing every Thing, and every row in every Thing.  We have
+to do a complete rework because the URL may have changed, and that affects everything that has
+been inserted into the AssetIndex.
+
+=cut
+
+sub indexContent {
+    my ($self)  = @_;
+    my $session = $self->session;
+    $self->SUPER::indexContent();
+    $self->reindexThings;
+}
+
+
+#-------------------------------------------------------------------
+
+=head2 indexThing ( $thing )
+
+Add an entry about this Thing into the AssetIndex so it can be found for searches.
+
+=head3 $thing
+
+A hashref of Thing properties, as returned by getThing
+
+=cut
+
+sub indexThing {
+    my ($self, $thing) = @_;
+    return unless $thing;
+    my $index = WebGUI::Search::Index->new($self);
+    $index->addRecord(
+        groupIdView => $thing->{groupIdView},
+        title       => $thing->{label},
+        subId       => $thing->{thingId},
+        keywords    => join(' ', @{$thing}{qw/label editScreenTitle editInstructions searchScreenTitle searchDescription/}),
+        url         => $self->session->url->append($self->get('url'), $self->getThingUrl($thing)),
+    );
+    ##Easy update of all thingData fields for this thing.  This is in lieu of deleting all records
+    ##And rebuilding them all.
+    $self->session->db->write(q|update assetIndex set title=?, groupIdView=? where assetId=? and subId like CONCAT(?, '%')|, [$thing->{label}, $thing->{groupIdView}, $self->getId, $thing->{thingId}]);
+}
+
+
+#-------------------------------------------------------------------
+
+=head2 indexThingData ( $thingId, $thingData )
+
+Add an entry about a row from this Thing into the AssetIndex so it can be found for searches.
+
+=head3 $thingId
+
+The GUID for a Thing.
+
+=head3 $thingData
+
+A hashref of ThingData properties
+
+=cut
+
+sub indexThingData {
+    my ($self, $thingId, $thingData) = @_;
+    my $session = $self->session;
+    return unless $thingId;
+    my $thing = $self->getThing($thingId);
+    my $index = WebGUI::Search::Index->new($self);
+    my $keywords;
+    ##Get the Thingy's fields
+    my $fields = $session->db->read('select * from Thingy_fields where assetId = ? and thingId = ?',
+        [$self->getId, $thingId]);
+    ##Walk the fields
+    my @viewScreenTitleFields = ();
+    FIELD: while (my %field = $fields->hash) {
+        my $fieldName = 'field_'.$field{fieldId};
+        $field{value} = $thingData->{$fieldName} || $field{defaultValue};
+        my $subkeywords = '';
+        my $value       = '';
+        if ($self->field_isa($field{fieldType}, 'WebGUI::Form::File')) {
+            my $storage = WebGUI::Storage->get($session, $field{value});
+            if ($storage) {
+                foreach my $file (@{$storage->getFiles()}) {
+                    $subkeywords =  $index->getKeywordsForFile($storage->getPath($file));
+                }
+            }
+        }
+        else {
+            $value = $self->getFieldValue($field{value}, \%field);
+            ##If it's a file type, then get keywords from the file.
+            ##Accumulate keywords
+            $subkeywords = $value;
+        }
+        if ($value && $field{viewScreenTitle}) {
+            push @viewScreenTitleFields, $value;
+        }
+        ##We don't index date fields, since they're unix epochs and they'd be different for everyone based on timezone.
+        next FIELD if $field{fieldType} eq 'date'
+                   || $field{fieldType} eq 'datetime'
+                   || $field{fieldType} eq 'time';
+        ##Don't show what shouldn't be shown
+        next FIELD unless $field{displayInSearch};
+        $keywords = join ' ', $keywords, $subkeywords;
+    }
+    return unless $keywords;  ##No sense indexing nothing;
+    my $title = join('', @viewScreenTitleFields)
+             || $thing->{label}
+             || $self->getTitle;
+    $index->addRecord(
+        assetId     => $self->getId,
+        url         => $session->url->append($self->get('url'), 'func=viewThingData;thingId='. $thing->{thingId} . ';thingDataId='. $thingData->{thingDataId}),
+        groupIdView => $thing->{groupIdView},
+        title       => $title,
+        subId       => $thing->{thingId} . '-' . $thingData->{thingDataId},
+        keywords    => $keywords,
+    );
 }
 
 
@@ -1422,6 +1743,30 @@ sub purge {
 
     return $self->SUPER::purge;
 }
+
+#-------------------------------------------------------------------
+
+=head2 reindexThings ( )
+
+Reindex every Thing, and every row in every Thing.
+
+=cut
+
+sub reindexThings {
+    my ($self)  = @_;
+    my $session = $self->session;
+    my $things = $self->getThings;
+    THING: while (my $thing = $things->hashRef) {
+        $self->deleteThingIndex($thing->{thingId});
+        $self->indexThing($thing);
+        my $sth = $session->db->read('select * from '. $session->db->dbh->quote_identifier('Thingy_'.$thing->{thingId}));
+        while (my $thingData = $sth->hashRef) {
+            $self->indexThingData($thing->{thingId}, $thingData);
+        }
+        $sth->finish;
+    }
+}
+
 
 #-------------------------------------------------------------------
 
@@ -1744,8 +2089,9 @@ sub www_editThing {
             thingsPerPage=>25,
             exportMetaData=>undef, 
             maxEntriesPerUser=>undef,
+            maxEntriesTotal=>undef,
         );
-        $thingId = $self->addThing(\%properties,0);
+        $thingId = "new";
     }
     else{
         %properties = %{$self->getThing($thingId)};
@@ -1850,14 +2196,14 @@ sub www_editThing {
                         ."  <td class='formDescription'>".$i18n->get('sort by label')."</td>\n"
                         ."</tr>\n";
     
-    $fields = $self->session->db->read('select * from Thingy_fields where assetId = '.$self->session->db->quote($self->get("assetId")).' and thingId = '.$self->session->db->quote($thingId).' order by sequenceNumber');
+    $fields = $self->getFields($thingId);
     while (my $field = $fields->hashRef) {
         my $formElement;
-        if ($field->{fieldType} eq "File"){
-            $formElement = "<input type='file' name='file'>";
-        }
-        if ($field->{fieldType} eq "Image"){
+        if ($self->field_isa($field->{fieldType}, 'WebGUI::Form::Image')) {
             $formElement = "<input type='file' name='image'>";
+        }
+        elsif ($self->field_isa($field->{fieldType}, 'WebGUI::Form::File')) {
+            $formElement = "<input type='file' name='file'>";
         }
         else{
             $formElement = $self->getFormElement($field);     
@@ -1873,11 +2219,12 @@ sub www_editThing {
             ."\n<table>\n<tr>\n"
             ."  <td style='width:100px;' valign='top' class='formDescription'>".$field->{label}."</td>\n"
             ."  <td style='width:370px;'>".$formElement."</td>\n"
-            ."  <td style='width:120px;' valign='top'> <input onClick=\"editListItem('".$self->session->url->page()
-            ."?func=editField;fieldId=".$field->{fieldId}.";thingId=".$thingId."','".$field->{fieldId}."')\" value='Edit' type='button'>"
-            ." <input onClick=\"editListItem('".$self->session->url->page()
-            ."?func=editField;copy=1;fieldId=".$field->{fieldId}.";thingId=".$thingId."','".$field->{fieldId}
-            ."','copy')\" value='Copy' type='button'>"
+            ."  <td style='width:120px;' valign='top'> <input onClick=\"editListItem('"
+            .$self->getUrl('func=editField;fieldId='.$field->{fieldId}.';thingId='.$thingId)
+            ."','".$field->{fieldId}."')\" value='".$i18n->get('Edit','Icon')."' type='button'>"
+            ." <input onClick=\"editListItem('"
+            .$self->getUrl('func=editField;copy=1;fieldId='.$field->{fieldId}.';thingId='.$thingId)
+            ."','".$field->{fieldId}."','copy')\" value='".$i18n->get('Copy','Icon')."' type='button'>"
             ."<input onClick=\"deleteListItem('".$self->session->url->page()."','".$field->{fieldId}."','".$thingId."')\" " 
             ."value='".$i18n->get('Delete','Icon')."' type='button'></td>\n</tr>\n</table>\n</li>\n";
 
@@ -1954,6 +2301,14 @@ sub www_editThing {
         -hoverHelp=> $i18n->get('max entries per user description'),
         -label => $i18n->get('max entries per user label')
     );
+
+    $tab->integer(
+        -name=> "maxEntriesTotal",
+        -value=> $properties{maxEntriesTotal},
+        -hoverHelp => $i18n->get('max entries total description'),
+        -label => $i18n->get('max entries total label')
+    );
+
     $tab->group(
         -name=> "groupIdAdd",
         -value=> $properties{groupIdAdd},
@@ -2157,47 +2512,46 @@ sub www_editThingSave {
 
     my $self = shift;
     return $self->session->privilege->insufficient() unless $self->canEdit;
-    my $form = $self->session->form;
-    my ($thingId, $fields);
-    $thingId = $self->session->form->process("thingId");
+    my $form    = $self->session->form;
+    my $thingId = $self->session->form->process("thingId");
+    my $fields  = $self->getFields($thingId);
 
-    $fields = $self->session->db->read('select * from Thingy_fields where assetId = '.$self->session->db->quote($self->get("assetId")).' and thingId = '.$self->session->db->quote($thingId).' order by sequenceNumber');
-
-        
-    $self->setCollateral("Thingy_things","thingId",{
-        thingId=>$thingId,
-        label=>$form->process("label"),
-        editScreenTitle=>$form->process("editScreenTitle"),
-        editInstructions=>$form->process("editInstructions"),
-        groupIdAdd=>$form->process("groupIdAdd"),
-        groupIdEdit=>$form->process("groupIdEdit"),
-        saveButtonLabel=>$form->process("saveButtonLabel"),
-        afterSave=>$form->process("afterSave"),
-        editTemplateId=>$form->process("editTemplateId") || 1,
-        onAddWorkflowId=>$form->process("onAddWorkflowId"),
-        onEditWorkflowId=>$form->process("onEditWorkflowId"),
-        onDeleteWorkflowId=>$form->process("onDeleteWorkflowId"),
-        groupIdView=>$form->process("groupIdView"),
-        viewTemplateId=>$form->process("viewTemplateId") || 1,
-        defaultView=>$form->process("defaultView"),
-        searchScreenTitle=>$form->process("searchScreenTitle"),
-        searchDescription=>$form->process("searchDescription"),
-        groupIdSearch=>$form->process("groupIdSearch"),
-        groupIdImport=>$form->process("groupIdImport"),
-        groupIdExport=>$form->process("groupIdExport"),
-        searchTemplateId=>$form->process("searchTemplateId") || 1,
-        thingsPerPage=>$form->process("thingsPerPage") || 25,
-        sortBy=>$form->process("sortBy") || '',
-        exportMetaData=>$form->process("exportMetaData") || '',
-        maxEntriesPerUser=>$form->process("maxEntriesPerUser") || '',
-        },0,1);
-    
     if($fields->rows < 1){
         $self->session->log->warn("Thing failed to create because it had no fields");
         my $i18n = WebGUI::International->new($self->session, "Asset_Thingy");
         return $self->www_editThing($i18n->get("thing must have fields"));
     }
-    
+
+    my $thing = {
+        thingId            => $thingId,
+        label              => $form->process("label"),
+        editScreenTitle    => $form->process("editScreenTitle"),
+        editInstructions   => $form->process("editInstructions"),
+        groupIdAdd         => $form->process("groupIdAdd"),
+        groupIdEdit        => $form->process("groupIdEdit"),
+        saveButtonLabel    => $form->process("saveButtonLabel"),
+        afterSave          => $form->process("afterSave"),
+        editTemplateId     => $form->process("editTemplateId") || 1,
+        onAddWorkflowId    => $form->process("onAddWorkflowId"),
+        onEditWorkflowId   => $form->process("onEditWorkflowId"),
+        onDeleteWorkflowId => $form->process("onDeleteWorkflowId"),
+        groupIdView        => $form->process("groupIdView"),
+        viewTemplateId     => $form->process("viewTemplateId") || 1,
+        defaultView        => $form->process("defaultView"),
+        searchScreenTitle  => $form->process("searchScreenTitle"),
+        searchDescription  => $form->process("searchDescription"),
+        groupIdSearch      => $form->process("groupIdSearch"),
+        groupIdImport      => $form->process("groupIdImport"),
+        groupIdExport      => $form->process("groupIdExport"),
+        searchTemplateId   => $form->process("searchTemplateId") || 1,
+        thingsPerPage      => $form->process("thingsPerPage") || 25,
+        sortBy             => $form->process("sortBy") || '',
+        exportMetaData     => $form->process("exportMetaData") || '',
+        maxEntriesPerUser  => $form->process("maxEntriesPerUser") || '',
+        maxEntriesTotal    => $form->process("maxEntriesTotal") || '',
+    };
+    $self->setCollateral("Thingy_things", "thingId", $thing, 0, 1);
+
     while (my $field = $fields->hashRef) {
         my $display = $self->session->form->process("display_".$field->{fieldId}) || 0;
         my $viewScreenTitle = $self->session->form->process("viewScreenTitle_".$field->{fieldId}) || 0;
@@ -2206,6 +2560,7 @@ sub www_editThingSave {
 
         $self->session->db->write("update Thingy_fields set display = ?, viewScreenTitle = ?, displayinSearch = ?, searchIn = ? where fieldId = ? and thingId = ?",[$display, $viewScreenTitle, $displayInSearch, $searchIn, $field->{fieldId}, $thingId]);
     }
+    $self->indexThing($thing);
     return $self->www_manage;
 }
 #-------------------------------------------------------------------
@@ -2260,17 +2615,21 @@ sub www_editFieldSave {
     my $log     = $session->log;
     my $defaultValue = $session->form->process("defaultValue");
     my $fieldType    = $session->form->process("fieldType") || "ReadOnly";
+    my $uniqueField  = $session->form->process("isUnique");
+
 
     if ($fieldType =~ m/^otherThing/){
         $defaultValue = $session->form->process("defaultFieldInThing");
     }
     
+    $thingId = $self->addThing({ thingId => 'new' },0) if $thingId eq 'new';
     $fieldId = $session->form->process("fieldId");
     %properties = (
         fieldId             => $fieldId,
         thingId             => $thingId,
         label               => $label,
         fieldType           => $fieldType,
+        isUnique            => $uniqueField,
         defaultValue        => $defaultValue,
         possibleValues      => $session->form->process("possibleValues"),
         pretext             => $session->form->process("pretext"),
@@ -2301,11 +2660,11 @@ sub www_editFieldSave {
         $newFieldId = $self->setCollateral("Thingy_fields","fieldId",\%properties,1,1,"thingId",$thingId);
     }
 
-    if ($properties{fieldType} eq "File"){ 
-        $formElement = "<input type='file' name='file'>";
-    }
-    elsif ($properties{fieldType} eq "Image"){ 
+    if ($self->field_isa($properties{fieldType}, 'WebGUI::Form::Image')) {
         $formElement = "<input type='file' name='image'>";
+    }
+    elsif ($self->field_isa($properties{fieldType}, 'WebGUI::Form::File')) {
+        $formElement = "<input type='file' name='file'>";
     }
     else{
         $formElement = $self->getFormElement(\%properties);
@@ -2319,15 +2678,16 @@ sub www_editFieldSave {
 
     $listItemHTML = "<table>\n<tr>\n<td style='width:100px;' valign='top' class='formDescription'>".$label."</td>\n"
         ."<td style='width:370px;'>".$formElement."</td>\n"
-        ."<td style='width:120px;' valign='top'> <input onClick=\"editListItem('".$session->url->page()
-        ."?func=editField;fieldId=".$newFieldId.";thingId=".$properties{thingId}."','".$newFieldId."')\" value='".$i18n->get('Edit','Icon')."' type='button'>"
+        ."<td style='width:120px;' valign='top'> <input onClick=\"editListItem('"
+        .$self->getUrl('func=editField;fieldId='.$newFieldId.';thingId='.$properties{thingId})
+        ."','".$newFieldId."')\" value='".$i18n->get('Edit','Icon')."' type='button'>"
         ."<input onClick=\"deleteListItem('".$session->url->page()."','".$newFieldId
         ."','".$properties{thingId}."')\" value='".$i18n->get('Delete','Icon')."' type='button'></td>\n</tr>\n</table>";
 
     # Make sure we send debug information along with the field.
     $log->preventDebugOutput;
 
-    $session->output->print($newFieldId.$listItemHTML);
+    $session->output->print($thingId.$newFieldId.$listItemHTML);
     return "chunked";
 }
 
@@ -2487,7 +2847,7 @@ sub editThingData {
         $var->{"delete_confirm"} = "onclick=\"return confirm('".$i18n->get("delete thing data warning")."')\"";
     }
 
-    if($self->hasPrivileges($thingProperties->{groupIdAdd}) && !$self->hasEnteredMaxPerUser($thingId)){    
+    if($self->hasPrivileges($thingProperties->{groupIdAdd}) && !$self->hasEnteredMaxPerUser($thingId) && !$self->hasEnteredMaxEntries($thingId)){    
         $var->{"add_url"} = $session->url->append($url,'func=editThingData;thingId='.$thingId.';thingDataId=new');
     }
     if($self->hasPrivileges($thingProperties->{groupIdSearch})){
@@ -2509,8 +2869,7 @@ sub editThingData {
         ." where thingDataId = ?",[$thingDataId]);
     }
 
-    $fields = $session->db->read('select * from Thingy_fields where assetId = ? and thingId = ? order by sequenceNumber'
-        ,[$self->getId,$thingId]);
+    $fields = $self->getFields($thingId);
     while (my %field = $fields->hash) {
         my $fieldName = 'field_'.$field{fieldId};
         $fieldValue = undef;
@@ -2554,6 +2913,15 @@ sub editThingData {
         delete $var->{field_loop};
         $var->{editInstructions} = $i18n->get("has entered max per user message");
     }
+    if($thingDataId eq 'new' && $self->hasEnteredMaxEntries($thingId)){
+        delete $var->{form_start};
+        delete $var->{form_end};
+        delete $var->{form_submit};
+        delete $var->{field_loop};
+        $var->{editInstructions} = $i18n->get("has entered max total message");
+    }
+
+
     return $self->processTemplate($var,$thingProperties->{editTemplateId});
 }
 
@@ -2583,6 +2951,10 @@ sub www_editThingDataSave {
     if($thingDataId eq 'new' && $self->hasEnteredMaxPerUser($thingId)){
         return $i18n->get("has entered max per user message");
     }
+    if($thingDataId eq 'new' && $self->hasEnteredMaxEntries($thingId)){
+        return $i18n->get("has entered max total message");
+    }
+
 
     ($newThingDataId,$errors) = $self->editThingDataSave($thingId,$thingDataId);
 
@@ -2653,6 +3025,10 @@ sub www_editThingDataSaveViaAjax {
             $session->http->setStatus("400", "Bad Request");
             return JSON->new->encode({message => $i18n->get("has entered max per user message")});
         }
+        if($thingDataId eq 'new' && $self->hasEnteredMaxEntries($thingId)){
+            $session->http->setStatus("400", "Bad Request");
+            return JSON->new->encode({message => $i18n->get("has entered max total message")});
+        }
 
     	my ($newThingDataId,$errors) = $self->editThingDataSave($thingId,$thingDataId);
 
@@ -2672,13 +3048,13 @@ sub www_editThingDataSaveViaAjax {
 
 #-------------------------------------------------------------------
 
-=head2 www_export ( )
+=head2 www_exportThing ( )
 
-Exports search results as csv.
+Exports one entire Thing as CSV.
 
 =cut
 
-sub www_export {
+sub www_exportThing {
     my $self = shift;
     my $session = $self->session;
     my ($query,$sth,$out,$fields,@fields,$fileName,@fieldLabels);
@@ -2692,30 +3068,28 @@ sub www_export {
     $pb->start($i18n->get('export label').' '.$thingProperties->{label}, $session->url->extras('assets/thingy.gif'));
     $pb->update($i18n->get('Creating column headers'));
     my $tempStorage = WebGUI::Storage->createTemp($session);
-    $fields = $session->db->read('select * from Thingy_fields where assetId =? and thingId = ? order by sequenceNumber',
-        [$self->get("assetId"),$thingId]);
+    $fields = $self->getFields($thingId);
     while (my $field = $fields->hashRef) {
-        if ($field->{displayInSearch}){
-            push(@fields, {
-                fieldId => $field->{fieldId},
-                properties => $field,
-            });
-            push(@fieldLabels,$field->{label});
-        }
+        push(@fields, {
+            fieldId => $field->{fieldId},
+            properties => $field,
+	});
+        push(@fieldLabels,$field->{label});
     }
+
     my @metaDataFields = ('thingDataId','dateCreated','createdById','updatedById','updatedByName','lastUpdated','ipAddress');
     if ($thingProperties->{exportMetaData}){
         push(@fieldLabels,@metaDataFields)
     }
  
-    $query = WebGUI::Cache->new($self->session,"query_".$thingId)->get;
+    $query = 'select * from '.$session->db->dbh->quote_identifier("Thingy_".$thingId);
     $sth = $session->db->read($query);
 
     ### Loop through the returned structure and put it through Text::CSV
     # Column heads
     my $csv_filename = 'export_'.$thingProperties->{label}.'.csv';
-    $tempStorage->addFileFromScalar($csv_filename, WebGUI::Text::joinCSV(@fieldLabels));
     open my $CSV, '>', $tempStorage->getPath($csv_filename);
+    print $CSV WebGUI::Text::joinCSV( @fieldLabels );
 
     # Data lines
     $pb->update($i18n->get('Writing data'));
@@ -2728,11 +3102,11 @@ sub www_export {
             my $value = $self->getFieldValue($data->{"field_".$fieldId},$field->{properties},"%y-%m-%d","%y-%m-%d %j:%n:%s");
             push(@fieldValues, $value);
         }
-        if ($thingProperties->{exportMetaData}) {
-            foreach my $metaDataField (@metaDataFields){
-                push(@fieldValues,$data->{$metaDataField});
-            }
-        }
+
+	if ($thingProperties->{exportMetaData}) {
+	    push(@fieldValues, @{$data}{@metaDataFields});
+	}
+
         print $CSV "\n".WebGUI::Text::joinCSV( @fieldValues );
         #if (! ++$rowCounter % 25) {
             $pb->update($i18n->get('Writing data'));
@@ -2740,7 +3114,7 @@ sub www_export {
     }
     close $CSV;
 
-    $pb->update(sprintf q|<a href="%s">%s</a>|, $self->getUrl, sprintf($i18n->get('Return to %s'), $thingProperties->{label}));
+    $pb->update(sprintf q|<a href="%s">%s</a>|, $self->getUrl($self->getThingUrl($thingProperties)), sprintf($i18n->get('Return to %s'), $thingProperties->{label}));
     return $pb->finish($tempStorage->getUrl($csv_filename));
 }
 
@@ -2774,8 +3148,7 @@ sub www_getThingViaAjax {
             $thingProperties->{groupIdView});
 
         my @field_loop;
-        my $fields = $session->db->read('select * from Thingy_fields where assetId=? and thingId=? order by sequenceNumber'
-        ,[$self->getId,$thingId]);
+        my $fields = $self->getFields($thingId);
         while (my $field = $fields->hashRef) {
             $field->{formElement} = $self->getFormElement($field);
             push(@field_loop,$field);
@@ -2840,6 +3213,9 @@ sub www_import {
     my $dbh = $session->db->dbh;
     my ($sql,$fields,@fields,$fileName,@insertColumns);
     my ($handleDuplicates,$newThingDataId);
+
+    my $i18n        = WebGUI::International->new($self->session, "Asset_Thingy");
+
 
     my $thingId = $session->form->process('thingId');
     my $thingProperties = $self->getThing($thingId);
@@ -2938,9 +3314,27 @@ sub www_import {
                 $error->info("Skipping line");
                 next;
             }
-            $thingData{lastUpdated} = time();
-            $thingData{updatedByName} = $session->user->username;
-            $thingData{updatedById} = $session->user->userId;
+
+	   # Is this a new record or are we updating an existing record?
+           if ($thingData{thingDataId} eq 'new') {
+            	$thingData{dateCreated} = time();
+            	$thingData{createdById} = $session->user->userId;
+           }
+           else {
+            	$thingData{lastUpdated} = time();
+            	$thingData{updatedByName} = $session->user->username;
+            	$thingData{updatedById} = $session->user->userId;
+           }
+
+           $thingData{ipAddress} = $session->env->getIp;
+
+           if($thingData{thingDataId} eq 'new' && $self->hasEnteredMaxPerUser($thingId)){
+             last;
+            }
+           if($thingData{thingDataId} eq 'new' && $self->hasEnteredMaxEntries($thingId)){
+	      last;
+            }
+
             $self->setCollateral("Thingy_".$thingId,"thingDataId",\%thingData,0,0) if ($thingData{thingDataId});
         }
         close $importFile;
@@ -3005,8 +3399,7 @@ sub www_importForm {
         ."  <td>".$i18n->get("check duplicates label")."</td>"
         ."</tr>";
 
-    $fields = $db->read('select label, fieldId from Thingy_fields where assetId =? and thingId = ? order by sequenceNumber',
-        [$self->get("assetId"),$thingId]);
+    $fields = $self->getFields($thingId);
     while (my $field = $fields->hashRef) {
         $fieldOptions .= "<tr><td>".$field->{label}."</td><td>";
         $fieldOptions .= WebGUI::Form::checkbox($self->session, {
@@ -3072,13 +3465,7 @@ sub www_manage {
             'thing_searchUrl' => $session->url->append($url, 'func=search;thingId='.$thing->{thingId}), 
         );
         # set the url for the view icon to the things default view
-        my $viewParams;
-        if ($thing->{defaultView} eq "addThing") {
-            $viewParams = 'func=editThingData;thingId='.$thing->{thingId}.';thingDataId=new';
-        }
-        else{
-            $viewParams = 'func=search;thingId='.$thing->{thingId};
-        }
+        my $viewParams = $self->getThingUrl($thing);
         $templateVars{'thing_viewIcon'} = $session->icon->view($viewParams);
         push (@things_loop, \%templateVars);
     }
@@ -3253,13 +3640,12 @@ sub getSearchTemplateVars {
     my $session = $self->session;
     my $dbh = $session->db->dbh;
     my $i18n = WebGUI::International->new($self->session,"Asset_Thingy");
-    my ($var,$url,$orderBy);
     my ($fields,@searchFields_loop,@displayInSearchFields_loop,$query,@constraints);
-    my (@searchResult_loop,$searchResults,@searchResults,@displayInSearchFields,$paginatePage,$currentUrl,$p);
+    my (@searchResult_loop,$searchResults,@searchResults,@displayInSearchFields,$paginatePage,$p);
 
-    $orderBy = $session->form->process("orderBy") || $thingProperties->{sortBy};
-    $var = $self->get;
-    $url = $self->getUrl;
+    my $orderBy = $session->form->process("orderBy") || $thingProperties->{sortBy};
+    my $var = $self->get;
+    my $url = $self->getUrl;
 
     $var->{canEditThings} = $self->canEdit;
     $var->{"addThing_url"} = $session->url->append($url, 'func=editThing;thingId=new');
@@ -3267,32 +3653,29 @@ sub getSearchTemplateVars {
     $var->{"thing_label"} = $thingProperties->{label};
 
     if ($self->hasPrivileges($thingProperties->{groupIdExport})){
-        $var->{"export_url"} = $session->url->append($url, 'func=export;thingId='.$thingId);
+        $var->{"export_url"} = $session->url->append($url, 'func=exportThing;thingId='.$thingId);
     }
     if ($self->hasPrivileges($thingProperties->{groupIdImport})){
         $var->{"import_url"} = $session->url->append($url, 'func=importForm;thingId='.$thingId);
     }
-    if ($self->hasPrivileges($thingProperties->{groupIdAdd}) && !$self->hasEnteredMaxPerUser($thingId)){
+    if ($self->hasPrivileges($thingProperties->{groupIdAdd}) && !$self->hasEnteredMaxPerUser($thingId) && !$self->hasEnteredMaxEntries($thingId) ){
         $var->{"add_url"} = $session->url->append($url,'func=editThingData;thingId='.$thingId.';thingDataId=new');
     }
     $var->{searchScreenTitle} = $thingProperties->{searchScreenTitle};    
     $var->{searchDescription} = $thingProperties->{searchDescription};
 
-    $currentUrl = $self->getUrl();
-    foreach ($self->session->form->param) {
-                                 # if we just saved data from an edit, we do not want to keep any of the params
-        last if $_ eq 'func' and $self->session->form->process($_) eq 'editThingDataSave';
-
-        unless ($_ eq "pn" || $_ eq "op" || $_ =~ /identifier/xi || $_ =~ /password/xi || $_ eq "orderBy" ||
-$self->session->form->process($_) eq "") {
-            $currentUrl = $self->session->url->append($currentUrl,$self->session->url->escape($_)
-            .'='.$self->session->url->escape($self->session->form->process($_)));
-        }
+    my $currentUrl;
+    my $func = $session->form->process('func');
+    $func = 'search' if $func eq 'editThingDataSave';
+    $currentUrl = $self->getUrl('func='.$func.';thingId='.$thingId);
+    ##Instead of blacklisting query params, they are whitelisted.  List is currently empty.
+    FORM: foreach my $form (qw//) {
+        my $param = $session->form->process($form);
+        next FORM unless defined $param;
+        $currentUrl = $session->url->append($currentUrl, $form.'='.$param);
     }
-    
-    $fields = $session->db->read('select * from Thingy_fields where assetId =
-'.$session->db->quote($self->get("assetId")).' and thingId = '.$session->db->quote($thingId).' order by
-sequenceNumber');
+ 
+    $fields = $self->getFields($thingId);
     while (my $field = $fields->hashRef) {
         if ($field->{searchIn}){
             my $searchForm = $self->getFormPlugin($field, 1);
@@ -3345,7 +3728,8 @@ sequenceNumber');
         }
         $query .= join(", ",map {$dbh->quote_identifier('field_'.$_->{fieldId})} @displayInSearchFields);
         $query .= " from ".$dbh->quote_identifier("Thingy_".$thingId);
-        if($session->form->process('func') eq 'search'){
+        my $func = $session->form->process('func');
+        if( $func eq 'search' || $func eq 'searchViaAjax' ){
             # Don't add constraints when the search screen is displayed as an 'after save' option.
             $query .= " where ".join(" and ",@constraints) if (scalar(@constraints) > 0);
         }
@@ -3358,9 +3742,6 @@ sequenceNumber');
         $noFields = 1;
     }
 
-    # store query in cache for thirty minutes
-    WebGUI::Cache->new($self->session,"query_".$thingId)->set($query,30*60);
-
     $paginatePage = $self->session->form->param('pn') || 1;
     $currentUrl   = $self->session->url->append($currentUrl, "orderBy=".$orderBy) if $orderBy;
 
@@ -3368,7 +3749,7 @@ sequenceNumber');
 
     my @visibleResults;
     if (! $noFields) {
-        my $sth = $self->session->db->read($query) if ! $noFields;
+        my $sth = $self->session->db->read($query);
         while (my $result = $sth->hashRef){
             if ($self->canViewThingData($thingId,$result->{thingDataId})){
                 push(@visibleResults,$result);
@@ -3545,6 +3926,11 @@ The unique id of a thing.
 
 The unique id of a row of thing data.
 
+=head3 templateId
+
+Optional.  The unique id or url of the template to be used.  When specified, the style template is not used.
+If omitted, the thing data view template and style will be used.
+
 =cut
 
 sub www_viewThingData {
@@ -3553,7 +3939,8 @@ sub www_viewThingData {
     my $session     = $self->session;
     my $thingId     = shift || $session->form->process('thingId');
     my $thingDataId = shift || $session->form->process('thingDataId');
-    
+    my $templateId 	= shift || $session->form->process('templateId');
+	my $callerAssetId	= shift || $session->form->process('callerAssetId');
     my $var     = $self->get;
     my $url     = $self->getUrl;
     my $i18n    = WebGUI::International->new($self->session, "Asset_Thingy");
@@ -3566,6 +3953,7 @@ sub www_viewThingData {
     $var->{"addThing_url"}  = $session->url->append($url, 'func=editThing;thingId=new');
     $var->{"manage_url"}    = $session->url->append($url, 'func=manage');
     $var->{"thing_label"}   = $thingProperties->{label};
+	$var->{"callerAssetId"} = $callerAssetId;
 
     if($self->hasPrivileges($thingProperties->{groupIdEdit})){
         $var->{"edit_url"} = $session->url->append($url,'func=editThingData;thingId='
@@ -3574,7 +3962,7 @@ sub www_viewThingData {
         .$thingId.';thingDataId='.$thingDataId);
         $var->{"delete_confirm"} = "onclick=\"return confirm('".$i18n->get("delete thing data warning")."')\"";
     }
-    if($self->hasPrivileges($thingProperties->{groupIdAdd}) && !$self->hasEnteredMaxPerUser($thingId)){
+    if($self->hasPrivileges($thingProperties->{groupIdAdd}) && !$self->hasEnteredMaxPerUser($thingId) && !$self->hasEnteredMaxEntries($thingId) ){
         $var->{"add_url"} = $session->url->append($url, 'func=editThingData;thingId='.$thingId.';thingDataId=new');
     }
     if($self->hasPrivileges($thingProperties->{groupIdSearch})){    
@@ -3583,9 +3971,19 @@ sub www_viewThingData {
 
     $self->getViewThingVars($thingId,$thingDataId,$var);
     $self->appendThingsVars($var, $thingId);
+	
+	my $template;
+	if( $templateId )
+	{
+		$template = WebGUI::Asset::Template->newByUrl( $session, $templateId ) ||
+					WebGUI::Asset::Template->newByDynamicClass( $session, $templateId );
+	}
+	
     return $self->processStyle(
-        $self->processTemplate($var,$thingProperties->{viewTemplateId})
-    );
+		$self->processTemplate($var,$thingProperties->{viewTemplateId})
+    ) if !$template;
+	
+    return $self->processTemplate($var,$template->getId,$template);
 }
 
 #-------------------------------------------------------------------

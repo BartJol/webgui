@@ -137,6 +137,7 @@ sub _initSession {
             'Payment Drivers'   => 'paymentGateway',
             'Database Links'    => 'databaseLink',
             'LDAP Links'        => 'ldapLink',
+            'Profile Fields'    => 'userProfileField',
         );
         my %initCounts;
         for ( my $i = 0; $i < @checkCount; $i += 2) {
@@ -750,6 +751,7 @@ were passed in.  Currently able to destroy:
     WebGUI::DatabaseLink
     WebGUI::LDAPLink
     WebGUI::Inbox::Message
+    WebGUI::ProfileField
 
 Example call:
 
@@ -833,6 +835,7 @@ Example call:
                     pbworkflow000000000006
                     pbworkflow000000000007
                     send_webgui_statistics
+                    xR-_GRRbjBojgLsFx3dEMA
                 };
         },
     );
@@ -853,6 +856,7 @@ Example call:
         'WebGUI::Inbox::Message'     => 'purge',
         'WebGUI::AdSpace'            => 'delete',
         'WebGUI::FilePump::Bundle'   => 'delete',
+        'WebGUI::ProfileField'       => 'delete',
         'WebGUI::Shop::Cart'         => sub {
             my $cart        = shift;
             my $addressBook = eval { $cart->getAddressBook(); };
@@ -870,7 +874,7 @@ Example call:
         },
         'WebGUI::LDAPLink'         => sub {
             my $link = shift;
-            $link->session->db->write("delete from ldapLink where ldapLinkId=?", [$link->{ldapLinkId}]);
+            $link->session->db->write("delete from ldapLink where ldapLinkId=?", [$link->{_ldapLinkId}]);
         },
         'CODE' => sub {
             (shift)->();

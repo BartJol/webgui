@@ -261,7 +261,9 @@ A hash reference with the address properties.
 
 sub formatAddress {
     my ($self, $address) = @_;
-    my $formatted = $address->{name} . "<br />" . $address->{address1} . "<br />";
+    my $formatted = $address->{name} . "<br />";
+    $formatted .= $address->{organization} . "<br />" if ($address->{organization} ne "");
+    $formatted .= $address->{address1} . "<br />";
     $formatted .= $address->{address2} . "<br />" if ($address->{address2} ne "");
     $formatted .= $address->{address3} . "<br />" if ($address->{address3} ne "");
     $formatted .= $address->{city} . ", ";
@@ -415,26 +417,28 @@ sub getTransactionVars {
         taxes                   => sprintf( "%.2f", $self->get('taxes') ),
         shippingPrice           => sprintf( "%.2f", $self->get('shippingPrice') ),
         shippingAddress         => $self->formatAddress( {
-            name        => $self->get('shippingAddressName'),
-            address1    => $self->get('shippingAddress1'),
-            address2    => $self->get('shippingAddress2'),
-            address3    => $self->get('shippingAddress3'),
-            city        => $self->get('shippingCity'),
-            state       => $self->get('shippingState'),
-            code        => $self->get('shippingCode'),
-            country     => $self->get('shippingCountry'),
-            phoneNumber => $self->get('shippingPhoneNumber'),
+            name         => $self->get('shippingAddressName'),
+            organization => $self->get('shippingOrganization'),
+            address1     => $self->get('shippingAddress1'),
+            address2     => $self->get('shippingAddress2'),
+            address3     => $self->get('shippingAddress3'),
+            city         => $self->get('shippingCity'),
+            state        => $self->get('shippingState'),
+            code         => $self->get('shippingCode'),
+            country      => $self->get('shippingCountry'),
+            phoneNumber  => $self->get('shippingPhoneNumber'),
         } ),
         paymentAddress          =>  $self->formatAddress({
-            name        => $self->get('paymentAddressName'),
-            address1    => $self->get('paymentAddress1'),
-            address2    => $self->get('paymentAddress2'),
-            address3    => $self->get('paymentAddress3'),
-            city        => $self->get('paymentCity'),
-            state       => $self->get('paymentState'),
-            code        => $self->get('paymentCode'),
-            country     => $self->get('paymentCountry'),
-            phoneNumber => $self->get('paymentPhoneNumber'),
+            name         => $self->get('paymentAddressName'),
+            organization => $self->get('paymentOrganization'),
+            address1     => $self->get('paymentAddress1'),
+            address2     => $self->get('paymentAddress2'),
+            address3     => $self->get('paymentAddress3'),
+            city         => $self->get('paymentCity'),
+            state        => $self->get('paymentState'),
+            code         => $self->get('paymentCode'),
+            country      => $self->get('paymentCountry'),
+            phoneNumber  => $self->get('paymentPhoneNumber'),
         } ),
     };
     
@@ -444,25 +448,31 @@ sub getTransactionVars {
         my $address = '';
         if ($self->get('shippingAddressId') ne $item->get('shippingAddressId')) {
             $address = $self->formatAddress({
-                            name        => $item->get('shippingAddressName'),
-                            address1    => $item->get('shippingAddress1'),
-                            address2    => $item->get('shippingAddress2'),
-                            address3    => $item->get('shippingAddress3'),
-                            city        => $item->get('shippingCity'),
-                            state       => $item->get('shippingState'),
-                            code        => $item->get('shippingCode'),
-                            country     => $item->get('shippingCountry'),
-                            phoneNumber => $item->get('shippingPhoneNumber'),
+                            name         => $item->get('shippingAddressName'),
+                            organization => $self->get('shippingOrganization'),
+                            address1     => $item->get('shippingAddress1'),
+                            address2     => $item->get('shippingAddress2'),
+                            address3     => $item->get('shippingAddress3'),
+                            city         => $item->get('shippingCity'),
+                            state        => $item->get('shippingState'),
+                            code         => $item->get('shippingCode'),
+                            country      => $item->get('shippingCountry'),
+                            phoneNumber  => $item->get('shippingPhoneNumber'),
                             });
         }
  
         # Post purchase actions
         my $actionsLoop = [];
-        my $actions     = $item->getSku->getPostPurchaseActions( $item );
-        for my $label ( keys %{$actions} ) {
-            push @{$actionsLoop}, {
-                label       => $label,
-                url         => $actions->{$label},
+        my $sku = eval { $item->getSku };
+        my $has_sku = 0;
+        if (! WebGUI::Error->caught) {
+            my $actions = $sku->getPostPurchaseActions( $item );
+            $has_sku    = 1;
+            for my $label ( keys %{$actions} ) {
+                push @{$actionsLoop}, {
+                    label       => $label,
+                    url         => $actions->{$label},
+                }
             }
         }
 
@@ -480,7 +490,8 @@ sub getTransactionVars {
             %{$item->get},
             %taxVars,
             viewItemUrl             => $url->page('shop=transaction;method=viewItem;transactionId='.$self->getId.';itemId='.$item->getId, 1),
-            price                   => sprintf("%.2f", $item->get('price')),
+            hasSku                  => $has_sku,
+            price                   => sprintf( "%.2f", $item->get('price') ),
             pricePlusTax            => sprintf( "%.2f", $price + $taxAmount ),
             extendedPrice           => sprintf( "%.2f", $quantity * $price ),
             extendedPricePlusTax    => sprintf( "%.2f", $quantity * ( $price + $taxAmount ) ),
@@ -747,28 +758,30 @@ sub update {
         $newProperties->{taxes} = $cart->calculateTaxes;
 
         my $billingAddress = $cart->getBillingAddress;
-        $newProperties->{paymentAddressId}   = $billingAddress->getId;
-        $newProperties->{paymentAddressName} = $billingAddress->get('firstName') . " " . $billingAddress->get('lastName');
-        $newProperties->{paymentAddress1}    = $billingAddress->get('address1');
-        $newProperties->{paymentAddress2}    = $billingAddress->get('address2');
-        $newProperties->{paymentAddress3}    = $billingAddress->get('address3');
-        $newProperties->{paymentCity}        = $billingAddress->get('city');
-        $newProperties->{paymentState}       = $billingAddress->get('state');
-        $newProperties->{paymentCountry}     = $billingAddress->get('country');
-        $newProperties->{paymentCode}        = $billingAddress->get('code');
-        $newProperties->{paymentPhoneNumber} = $billingAddress->get('phoneNumber');
+        $newProperties->{paymentAddressId}    = $billingAddress->getId;
+        $newProperties->{paymentAddressName}  = $billingAddress->get('firstName') . " " . $billingAddress->get('lastName');
+        $newProperties->{paymentOrganization} = $billingAddress->get('organization');
+        $newProperties->{paymentAddress1}     = $billingAddress->get('address1');
+        $newProperties->{paymentAddress2}     = $billingAddress->get('address2');
+        $newProperties->{paymentAddress3}     = $billingAddress->get('address3');
+        $newProperties->{paymentCity}         = $billingAddress->get('city');
+        $newProperties->{paymentState}        = $billingAddress->get('state');
+        $newProperties->{paymentCountry}      = $billingAddress->get('country');
+        $newProperties->{paymentCode}         = $billingAddress->get('code');
+        $newProperties->{paymentPhoneNumber}  = $billingAddress->get('phoneNumber');
 
         my $shippingAddress = $cart->getShippingAddress;
-        $newProperties->{shippingAddressId}   = $shippingAddress->getId;
-        $newProperties->{shippingAddressName} = $shippingAddress->get('firstName') . " " . $shippingAddress->get('lastName');
-        $newProperties->{shippingAddress1}    = $shippingAddress->get('address1');
-        $newProperties->{shippingAddress2}    = $shippingAddress->get('address2');
-        $newProperties->{shippingAddress3}    = $shippingAddress->get('address3');
-        $newProperties->{shippingCity}        = $shippingAddress->get('city');
-        $newProperties->{shippingState}       = $shippingAddress->get('state');
-        $newProperties->{shippingCountry}     = $shippingAddress->get('country');
-        $newProperties->{shippingCode}        = $shippingAddress->get('code');
-        $newProperties->{shippingPhoneNumber} = $shippingAddress->get('phoneNumber');
+        $newProperties->{shippingAddressId}    = $shippingAddress->getId;
+        $newProperties->{shippingAddressName}  = $shippingAddress->get('firstName') . " " . $shippingAddress->get('lastName');
+        $newProperties->{shippingOrganization} = $shippingAddress->get('organization');
+        $newProperties->{shippingAddress1}     = $shippingAddress->get('address1');
+        $newProperties->{shippingAddress2}     = $shippingAddress->get('address2');
+        $newProperties->{shippingAddress3}     = $shippingAddress->get('address3');
+        $newProperties->{shippingCity}         = $shippingAddress->get('city');
+        $newProperties->{shippingState}        = $shippingAddress->get('state');
+        $newProperties->{shippingCountry}      = $shippingAddress->get('country');
+        $newProperties->{shippingCode}         = $shippingAddress->get('code');
+        $newProperties->{shippingPhoneNumber}  = $shippingAddress->get('phoneNumber');
 
         if ($cart->requiresShipping) {
             my $shipper = $cart->getShipper;
@@ -789,9 +802,15 @@ sub update {
         $newProperties->{paymentDriverId}    = $pay->getId;
         $newProperties->{paymentDriverLabel} = $pay->get('label');
 
+        ##Clear out current transaction items before adding new ones.
+        foreach my $item (@{$self->getItems}) {
+            $item->delete;
+        } 
         foreach my $item (@{$cart->getItems}) {
             $self->addItem({item=>$item});
         }
+
+        $newProperties->{isRecurring} = $cart->requiresRecurringPayment;
     }
     if (exists $newProperties->{paymentMethod}) {
         my $pay = $newProperties->{paymentMethod};
@@ -803,7 +822,8 @@ sub update {
         shippingCountry shippingCode shippingPhoneNumber shippingDriverId shippingDriverLabel notes
         shippingPrice paymentAddressId paymentAddressName originatingTransactionId isRecurring
         paymentAddress1 paymentAddress2 paymentAddress3 paymentCity paymentState paymentCountry paymentCode
-        paymentPhoneNumber paymentDriverId paymentDriverLabel taxes shopCreditDeduction));
+        paymentPhoneNumber paymentDriverId paymentDriverLabel taxes shopCreditDeduction
+        shippingOrganization paymentOrganization));
     foreach my $field (@fields) {
         $properties{$id}{$field} = (exists $newProperties->{$field}) ? $newProperties->{$field} : $properties{$id}{$field};
     }
@@ -1020,8 +1040,8 @@ Refunds a specific item from a transaction and then issues shop credit.
 sub www_refundItem {
     my ($class, $session) = @_;
     return $session->privilege->insufficient unless (WebGUI::Shop::Admin->new($session)->canManage);
-    my $self = $class->new($session, $session->form->get("transactionId"));
     my $form = $session->form;
+    my $self = $class->new($session, $form->get("transactionId"));
     my $item = eval { $self->getItem($form->get("itemId")) };
     if (WebGUI::Error->caught()) {
         $session->errorHandler->error("Can't get item ".$form->get("itemId"));
@@ -1125,15 +1145,16 @@ sub www_view {
             </tr>
             <tr>
                 <th>}. $i18n->get("shipping address") .q{</th><td>}. $transaction->formatAddress({
-                        name        => $transaction->get('shippingAddressName'),
-                        address1    => $transaction->get('shippingAddress1'),
-                        address2    => $transaction->get('shippingAddress2'),
-                        address3    => $transaction->get('shippingAddress3'),
-                        city        => $transaction->get('shippingCity'),
-                        state       => $transaction->get('shippingState'),
-                        code        => $transaction->get('shippingCode'),
-                        country     => $transaction->get('shippingCountry'),
-                        phoneNumber => $transaction->get('shippingPhoneNumber'),
+                        name         => $transaction->get('shippingAddressName'),
+                        organization => $transaction->get('shippingOrganization'),
+                        address1     => $transaction->get('shippingAddress1'),
+                        address2     => $transaction->get('shippingAddress2'),
+                        address3     => $transaction->get('shippingAddress3'),
+                        city         => $transaction->get('shippingCity'),
+                        state        => $transaction->get('shippingState'),
+                        code         => $transaction->get('shippingCode'),
+                        country      => $transaction->get('shippingCountry'),
+                        phoneNumber  => $transaction->get('shippingPhoneNumber'),
                         }) .q{</td>
             </tr>
             <tr>
@@ -1144,15 +1165,16 @@ sub www_view {
             </tr>
             <tr>
                 <th>}. $i18n->get("payment address") .q{</th><td>}. $transaction->formatAddress({
-                        name        => $transaction->get('paymentAddressName'),
-                        address1    => $transaction->get('paymentAddress1'),
-                        address2    => $transaction->get('paymentAddress2'),
-                        address3    => $transaction->get('paymentAddress3'),
-                        city        => $transaction->get('paymentCity'),
-                        state       => $transaction->get('paymentState'),
-                        code        => $transaction->get('paymentCode'),
-                        country     => $transaction->get('paymentCountry'),
-                        phoneNumber => $transaction->get('paymentPhoneNumber'),
+                        name         => $transaction->get('paymentAddressName'),
+                        organization => $transaction->get('paymentOrganization'),
+                        address1     => $transaction->get('paymentAddress1'),
+                        address2     => $transaction->get('paymentAddress2'),
+                        address3     => $transaction->get('paymentAddress3'),
+                        city         => $transaction->get('paymentCity'),
+                        state        => $transaction->get('paymentState'),
+                        code         => $transaction->get('paymentCode'),
+                        country      => $transaction->get('paymentCountry'),
+                        phoneNumber  => $transaction->get('paymentPhoneNumber'),
                         }) .q{</td>
             </tr>
         </table>
@@ -1177,6 +1199,8 @@ sub www_view {
         <tbody>
     };
     foreach my $item (@{$transaction->getItems}) {
+        eval { $item->getSku; };
+        my $sku_exists = !WebGUI::Error->caught;
         $output .= WebGUI::Form::formHeader($session)
             .WebGUI::Form::hidden($session, {name=>"shop",value=>"transaction"})
             .WebGUI::Form::hidden($session, {name=>"method",value=>"updateItem"})
@@ -1184,9 +1208,15 @@ sub www_view {
             .WebGUI::Form::hidden($session, {name=>"itemId",value=>$item->getId})
             .q{
             <tr>
-            <td>}.$item->get('lastUpdated').q{</td>
-            <td><a href="}.$url->page('shop=transaction;method=viewItem;transactionId='.$transaction->getId.';itemId='.$item->getId).q{">}.$item->get('configuredTitle').q{</a></td>
-            <td>}.$transaction->formatCurrency($item->get('price')).q{</td>
+            <td>}.$item->get('lastUpdated').qq{</td>\n}.
+            (
+                $sku_exists
+                ?  q{<td><a href="}.$url->page('shop=transaction;method=viewItem;transactionId='.$transaction->getId
+                   . ';itemId='.$item->getId).q{">}.$item->get('configuredTitle').qq{</a></td>\n}
+                :  q{<td>}.$item->get('configuredTitle').q{<br />}.$i18n->get('item sku deleted').qq{</td>\n}
+ 
+            )
+            . q{<td>}.$transaction->formatCurrency($item->get('price')).q{</td>
             <td>}.$item->get('quantity').q{</td>
         };
         if ($item->get('shippingAddressId') eq $transaction->get('shippingAddressId')) {
@@ -1195,15 +1225,16 @@ sub www_view {
         else {
             $output .= q{
                 <td class="smallAddress">}. $transaction->formatAddress({
-                            name        => $item->get('shippingAddressName'),
-                            address1    => $item->get('shippingAddress1'),
-                            address2    => $item->get('shippingAddress2'),
-                            address3    => $item->get('shippingAddress3'),
-                            city        => $item->get('shippingCity'),
-                            state       => $item->get('shippingState'),
-                            code        => $item->get('shippingCode'),
-                            country     => $item->get('shippingCountry'),
-                            phoneNumber => $item->get('shippingPhoneNumber'),
+                            name         => $item->get('shippingAddressName'),
+                            organization => $item->get('shippingOrganization'),
+                            address1     => $item->get('shippingAddress1'),
+                            address2     => $item->get('shippingAddress2'),
+                            address3     => $item->get('shippingAddress3'),
+                            city         => $item->get('shippingCity'),
+                            state        => $item->get('shippingState'),
+                            code         => $item->get('shippingCode'),
+                            country      => $item->get('shippingCountry'),
+                            phoneNumber  => $item->get('shippingPhoneNumber'),
                             }) .q{</td>
             };
         }
@@ -1262,7 +1293,12 @@ sub www_viewItem {
         $session->errorHandler->error("Can't get item ".$session->form->get("itemId"));
         return $class->www_view($session);
     }
-    return $item->getSku->www_view;
+    my $sku = eval { $item->getSku };
+    if (WebGUI::Error->caught()) {
+        $session->errorHandler->error("Can't get sku for ".$session->form->get("itemId"));
+        return $class->www_view($session);
+    }
+    return $sku->www_view;
 }
 
 #-------------------------------------------------------------------

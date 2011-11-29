@@ -97,6 +97,23 @@ sub canView {
 
 #-------------------------------------------------------------------
 
+=head2 cleanINC(@INC)
+
+Class method. Returns a new @INC array (but does not set it) to be used for
+forked/daemonized processes. Note that you pass in @INC and new one is
+returned, but doesn't replace the original. You must do that yourself.
+
+=cut
+
+sub cleanINC {
+    # gotta get rid of hooks until we think of a way to serialize them in
+    # forkAndExec (if we ever want to). Serializing coderefs is a tricky
+    # business.
+    map { File::Spec->rel2abs($_) } grep { !ref } @_;
+}
+
+#-------------------------------------------------------------------
+
 =head2 contentPairs ($module, $pid, $extra)
 
 Returns a bit of query string useful for redirecting to a
@@ -261,6 +278,7 @@ sub finish {
         $props{latch}  = 0;
     }
     $props{endTime} = time();
+    $props{redirect} = $self->{redirect};
     $self->set( \%props );
 }
 
@@ -278,7 +296,7 @@ sub forkAndExec {
     my $id    = $self->getId;
     my $class = ref $self;
     my $json  = JSON::encode_json($request);
-    my @inc   = map {"-I$_"} map { File::Spec->rel2abs($_) } grep { !ref } @INC;
+    my @inc   = map { "-I$_" } $class->cleanINC(@INC);
     my @argv  = (@inc, "-M$class", "-e$class->runCmd()" );
     $class->daemonize(
         $json,
@@ -413,13 +431,14 @@ sub init {
     $0 = 'webgui-fork-master';
     $pipe->reader;
     local $/ = "\x{0}";
+    @INC = $class->cleanINC(@INC);
     while ( my $request = $pipe->getline ) {
         chomp $request;
         eval {
             $class->daemonize( $request, sub { $class->runCmd } );
         };
     }
-    exit 0;
+    CORE::exit(0);
 } ## end sub init
 
 #-----------------------------------------------------------------
@@ -492,6 +511,20 @@ sub setGroup {
     my ( $self, $groupId ) = @_;
     $groupId = eval { $groupId->getId } || $groupId;
     $self->set( { groupId => $groupId } );
+}
+
+#-----------------------------------------------------------------
+
+=head2 setRedirect($url)
+
+Allows a redirect to be set for the process after the initial fork.  This happens
+in the case when a file is to be downloaded after the fork finishes.
+
+=cut
+
+sub setRedirect {
+    my ( $self, $url ) = @_;
+    $self->{redirect} = $url;
 }
 
 #-----------------------------------------------------------------

@@ -456,8 +456,8 @@ ipAddress etc?|,
 
     'default value description' => {
         message => q|Enter the default value (if any) for the field. If you have defined the possible values for
-this field using a hash, then the default value has to be a key in that hash, and not a value. For Yes/No fields, enter "yes" to select "Yes" and "no" to select "No".|,
-        lastUpdated => 1223372150,
+this field using a hash, then the default value has to be a key in that hash, and not a value. For Yes/No fields, enter "yes" to select "Yes" and "no" to select "No". For Date and Date/Time fields, enter an epoch date, or a date in YYYY-MM-DD HH:MM:SS, the ISO 9601 format with optional time|,
+        lastUpdated => 1309814047,
     },
 
     'default value subtext' => {
@@ -918,8 +918,8 @@ below/after the form element.|,
     },
 
     'viewScreenTitle' => {
-        message => q|The title for the view screen|,
-        lastUpdated => 1104630516,
+        message => q|The title for the view screen.  This is the concatenation of all values for fields which have View Screen Title set for this Thing.  If no fields are set, then the title is empty.|,
+        lastUpdated => 1298915023,
     },
 
     'import_url' => {
@@ -929,8 +929,7 @@ below/after the form element.|,
     },
 
     'export_url' => {
-        message => q|Url to export the data in a search result into a csv file. This is only available after a
-search has been done.|,
+        message => q|Url to export the all data in a thing into a csv file.|,
         lastUpdated => 1104630516,
         context => q|Description of a tmpl_var for the template help.|,
     },
@@ -1143,6 +1142,30 @@ search has been done.|,
         message => q|Return to %s.|,
         lastUpdated => 1231180362,
         context => q|Status message in the Export Thingy progress bar. %s is the name of the Thing that is being exported.|,
+    },
+
+    'variables by label' => {
+        message => q|In addition to the <b>field_loop</b>, field values may be directly accessed via their label.  Please check the documentation for the template plugin that you are using to handle odd characters like spaces or quotes in the label.|,
+        lastUpdated => 1231180362,
+        context => q|Template variable help for getViewThingData|,
+    },
+
+    'unique label' => {
+        message => q|Unique|,
+        lastUpdated => 1308006166,
+        context => q|Label in the edit field screen.|,
+    },
+
+    'unique description' => {
+        message => q|Is this a unique field?  In simple terms, values in unique fields can't have any duplicates in other rows.|,
+        lastUpdated => 1308006162,
+        context => q|Hoverhelp for edit field screen|,
+    },
+
+    'callerAssetId' => {
+        message => q|When passed into the www_viewThingData, provides the assetId of the caller asset.  Used by RenderThingMacro.  See POD.|,
+        lastUpdated => 0,
+        context => q|Template variable help for www_viewThingData|,
     },
 
 };

@@ -676,8 +676,11 @@ sub requiresShipping {
     my $self    = shift;
 
     # Look for recurring items in the cart
-    foreach my $item (@{ $self->getItems }) {
-        return 1 if $item->getSku->isShippingRequired;
+    ITEM: foreach my $item (@{ $self->getItems }) {
+        my $sku = $item->getSku;
+        next ITEM unless $sku;
+        return 1 if $sku->isShippingRequired;
+
     }
 
     # No recurring items in cart so return false
@@ -755,15 +758,16 @@ sub updateFromForm {
             $item->update({shippingAddressId => $itemAddressId});
         }
     }
-    if ($self->hasMixedItems) {
-         my $i18n = WebGUI::International->new($self->session, "Shop");
-        $error{id $self} = $i18n->get('mixed items warning');
-    }
-
     my @cartItemIds = $form->process('remove_item', 'checkList');
     foreach my $cartItemId (@cartItemIds) {
         my $item = eval { $self->getItem($cartItemId); };
         $item->remove if ! Exception::Class->caught();
+    }
+
+    ##Remove the items BEFORE we check to see if there are duplicates.
+    if ($self->hasMixedItems) {
+         my $i18n = WebGUI::International->new($self->session, "Shop");
+        $error{id $self} = $i18n->get('mixed items warning');
     }
 
     ##Visitor cannot have an address book, or set a payment gateway, so skip the rest of this.
@@ -875,8 +879,10 @@ sub www_ajaxPrices {
         } || 0,
 
         shipping => eval {
-            die unless $shipping;
-            $self->update({ shippingAddressId => $shipping });
+            #die unless $shipping;
+            if ( $shipping ) {
+                $self->update({ shippingAddressId => $shipping });
+            }
             my $ship = WebGUI::Shop::Ship->new($self->session);
             $ship->getOptions($self);
         } || [],
@@ -923,7 +929,7 @@ sub www_checkout {
         my $total = $self->calculateTotal;
         ##Handle rounding errors, and checkout immediately if the amount is 0 since
         ##at least the ITransact driver won't accept $0 checkout.
-        if (sprintf('%.2f', $total + $self->calculateShopCreditDeduction($total)) eq '0.00') {
+        if (sprintf('%.2f', abs($total + $self->calculateShopCreditDeduction($total))) eq '0.00') {
             my $transaction = WebGUI::Shop::Transaction->create($session, {cart => $self});
             $transaction->completePurchase('zero', 'success', 'success');
             $self->onCompletePurchase;
@@ -967,9 +973,6 @@ sub www_lookupPosUser {
 
 Updates the cart totals, addresses, shipping driver and payment gateway. If requested, and the
 cart is ready, calls the www_getCredentials method from the selected payment gateway.
-
-If the cart total, after taxes, shipping, coupons and shop credit is zero, does the checkout
-immediately without calling a payment gateway.
 
 Otherwise, returns the user back to the cart.
 
@@ -1021,6 +1024,10 @@ sub www_view {
         return $session->style->userStyle($template->process(\%var));
     }
 
+    if ($self->hasMixedItems) {
+        $error{id $self} = $i18n->get('mixed items warning');
+    }
+
     my %var = (
         %{$self->get},
         formHeader              => WebGUI::Form::formHeader($session, { extras => q|id="wgCartId"|, })
@@ -1044,12 +1051,18 @@ sub www_view {
         shippableItemsInCart    => $self->requiresShipping,
     );
 
-
     # get the shipping address    
     my $address = eval { $self->getShippingAddress };
     if (my $e = WebGUI::Error->caught("WebGUI::Error::ObjectNotFound") && $self->get('shippingAddressId')) {
         # choose another address cuz we've got a problem
         $self->update({shippingAddressId=>''});
+    }
+
+    #get the billing address
+    my $billingAddress = eval { $self->getBillingAddress };
+    if (my $e = WebGUI::Error->caught("WebGUI::Error::ObjectNotFound") && $self->get('billingAddressId')) {
+        # choose another address cuz we've got a problem
+        $self->update({billingAddressId=>''});
     }
 
     # generate template variables for the items in the cart
@@ -1172,7 +1185,13 @@ sub www_view {
 
         my $billingAddressId = $self->get('billingAddressId');
         if ($billingAddressId) {
-            $billingAddressOptions{'update_address'} = sprintf $i18n->get('Update %s'), $self->getBillingAddress->get('label');
+            my $billingAddress = eval { $self->getBillingAddress };
+            if ( defined $billingAddress ) {
+                $billingAddressOptions{'update_address'} = sprintf $i18n->get('Update %s'), $billingAddress->get('label');
+            }
+            elsif (my $e = WebGUI::Error->caught("WebGUI::Error::ObjectNotFound") && $self->get('billingAddressId')) {
+                $self->update({billingAddressId=>''});
+            }
         }
 
         %billingAddressOptions = (%billingAddressOptions, %addressOptions);
@@ -1188,7 +1207,10 @@ sub www_view {
 
         my $shippingAddressId = $self->get('shippingAddressId');
         if ($shippingAddressId) {
-            $shippingAddressOptions{'update_address'} = sprintf $i18n->get('Update %s'), $self->getShippingAddress->get('label');
+            my $shippingAddress = eval { $self->getShippingAddress };
+            if ( defined $shippingAddress ) {
+               $shippingAddressOptions{'update_address'} = sprintf $i18n->get('Update %s'), $shippingAddress->get('label');
+            }
         }
         %shippingAddressOptions = (%shippingAddressOptions, %addressOptions);
 
@@ -1204,9 +1226,11 @@ sub www_view {
         $addressBook->appendAddressFormVars(\%var, 'shipping_', $shippingAddressData);
         $addressBook->appendAddressFormVars(\%var, 'billing_',  $billingAddressData);
 
+        my $has_billing_addr = $self->get('billingAddressId') ? 1 : 0;
+
         $var{sameShippingAsBilling} = WebGUI::Form::yesNo($session, {
             name => 'sameShippingAsBilling',
-            value => $self->get('billingAddressId') && $self->get('billingAddressId') eq $self->get('shippingAddressId'),
+            value => (($has_billing_addr && $self->get('billingAddressId') eq $self->get('shippingAddressId')) || !$has_billing_addr),
         });
     }
 
@@ -1247,14 +1271,6 @@ sub www_view {
 
     # render the cart
     my $template = WebGUI::Asset::Template->new($session, $session->setting->get("shopCartTemplateId"));
-
-    my $style = $session->style;
-    my $yui = $url->extras('/yui/build');
-    $style->setScript("$yui/yahoo-dom-event/yahoo-dom-event.js");
-    $style->setScript("$yui/json/json-min.js");
-    $style->setScript("$yui/connection/connection-min.js");
-    $style->setScript($url->extras('underscore/underscore-min.js'));
-    $style->setScript($url->extras('shop/cart.js'), undef, 1);
     return $session->style->userStyle($template->process(\%var));
 }
 

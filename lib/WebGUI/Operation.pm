@@ -130,6 +130,8 @@ sub getOperations {
 		'listGroups' => 'Group',
 		'manageGroupsInGroup' => 'Group',
 		'manageUsersInGroup' => 'Group',
+		'manageGroups' => 'Group',
+		'updateGroupUsers' => 'Group',
 
 		'viewHelp' => 'Help',
 		'viewHelpIndex' => 'Help',
@@ -199,6 +201,7 @@ sub getOperations {
         'ajaxDeleteUser' => 'User',
         'ajaxUpdateUser' => 'User',
 		'becomeUser' => 'User',
+		'confirmUserEmail' => 'User',
 		'deleteUser' => 'User',
 		'editUser' => 'User',
 		'editUserSave' => 'User',

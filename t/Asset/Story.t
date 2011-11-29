@@ -8,6 +8,8 @@
 # http://www.plainblack.com                     info@plainblack.com
 #-------------------------------------------------------------------
 
+use Test::MockTime qw/:all/;
+
 use FindBin;
 use strict;
 use lib "$FindBin::Bin/../lib";
@@ -84,7 +86,7 @@ WebGUI::Test->addToCleanup($storage1, $storage2);
 #
 ############################################################
 
-my $tests = 45;
+my $tests = 50;
 plan tests => 1
             + $tests
             + $canEditMaker->plan
@@ -266,6 +268,12 @@ cmp_deeply(
     'getCrumbTrail: with topic set'
 );
 
+cmp_bag(
+    $story->exportGetRelatedAssetIds,
+    [ $topic->getId, $archive->getId ],
+    'exportGetRelatedAssetIds',
+) or diag Dumper $story->exportGetRelatedAssetIds;
+
 $story->topic('');
 
 ############################################################
@@ -326,6 +334,14 @@ $story->setPhotoData([
         title     => '',
         url       => 'http://www.lamp.com',
     },
+    {
+        remoteUrl => 'http://www.plainblack.com/rockstar.jpg',
+        caption   => 'Elvis',
+        byLine    => 'The King',
+        alt       => '(impersonator)',
+        title     => 'Rockstar Support',
+        url       => 'http://plainblack.com/services/support/rockstar-support',
+    },
 ]);
 
 
@@ -356,6 +372,15 @@ cmp_bag(
 
 is ($viewVariables->{updatedTimeEpoch}, $story->get('revisionDate'), 'viewTemplateVariables: updatedTimeEpoch');
 
+my $rockstarVar = {
+    imageUrl     => 'http://www.plainblack.com/rockstar.jpg',
+    imageCaption => 'Elvis',
+    imageByline  => 'The King',
+    imageAlt     => '(impersonator)',
+    imageTitle   => 'Rockstar Support',
+    imageLink    => 'http://plainblack.com/services/support/rockstar-support',
+};
+
 cmp_deeply(
     $viewVariables->{photo_loop},
     [
@@ -375,6 +400,7 @@ cmp_deeply(
             imageTitle   => '',
             imageLink    => 'http://www.lamp.com',
         },
+        $rockstarVar,
     ],
     'viewTemplateVariables: photo_loop is okay'
 );
@@ -383,20 +409,14 @@ ok(! $viewVariables->{singlePhoto}, 'viewVariables: singlePhoto: there is more t
 ok(  $viewVariables->{hasPhotos},   'viewVariables: hasPhotos: it has photos');
 
 ##Simulate someone deleting the file stored in the storage object.
+$storage1->deleteFile('gooey.jpg');
 $storage2->deleteFile('lamp.jpg');
 $viewVariables = $story->viewTemplateVariables;
 
 cmp_deeply(
     $viewVariables->{photo_loop},
     [
-        {
-            imageUrl     => re('gooey.jpg'),
-            imageCaption => 'Mascot for a popular CMS',
-            imageByline  => 'Darcy Gibson',
-            imageAlt     => 'Gooey',
-            imageTitle   => 'Mascot',
-            imageLink    => 'http://www.webgui.org',
-        },
+        $rockstarVar,
     ],
     'viewTemplateVariables: photo_loop: if the storage has no files, it is not shown'
 );
@@ -443,6 +463,83 @@ cmp_bag(
     ],
     '...asset package data has the storage locations in it'
 );
+
+############################################################
+#
+# keyword variables in export mode
+#
+############################################################
+
+$session->scratch->set('isExporting', 1);
+
+my $keyword_loop = $story->viewTemplateVariables->{keyword_loop};
+cmp_bag(
+    $keyword_loop,
+    [
+        { keyword => "foxtrot", url => '../keyword_foxtrot.html', },
+        { keyword => "tango",   url => '../keyword_tango.html', },
+        { keyword => "whiskey", url => '../keyword_whiskey.html', },
+    ],
+    'viewTemplateVariables: keywords_loop is okay'
+) or diag Dumper( $keyword_loop );
+$session->scratch->delete('isExporting');
+
+############################################################
+#
+# addRevision, copying and duplicating photo data
+#
+############################################################
+
+set_relative_time(-70);
+
+my $rev_story = $archive->addChild({
+    className => 'WebGUI::Asset::Story',
+    title     => 'Story revision',
+    subtitle  => 'The story of a CMS',
+    byline    => 'C.F. Kuskie',
+    story     => 'Revisioning a story should not cause the photo information to be lost.',
+}, undef, undef, { skipAutoCommitWorkflows => 1, skipNotification => 1, });
+
+my $tag = WebGUI::VersionTag->getWorking($session);
+$tag->commit;
+
+my $rev_story = $rev_story->cloneFromDb;
+
+my $rev_storage = WebGUI::Storage->create($session);
+
+$rev_story->setPhotoData([{
+    byLine    => 'C Forest Kuskie',
+    caption   => 'ugly old hacker',
+    storageId => $rev_storage->getId,
+}]);
+
+cmp_deeply(
+    $rev_story->getPhotoData,
+    [{
+        byLine  => 'C Forest Kuskie',
+        caption => 'ugly old hacker',
+        storageId => $rev_storage->getId,
+    }],
+    'setup for add revision test, photo data'
+);
+
+restore_time();
+
+my $revision = $rev_story->addRevision({}, undef, undef, { skipAutoCommitWorkflows => 1, skipNotification => 1, });
+
+cmp_deeply(
+    $revision->getPhotoData,
+    [{
+        byLine    => 'C Forest Kuskie',
+        caption   => 'ugly old hacker',
+        storageId => ignore(),
+    }],
+    'revision has a copy of most of the photo data'
+);
+
+my $revision_storageId = $revision->getPhotoData->[0]->{storageId};
+
+ok($revision_storageId && ($revision_storageId ne $rev_storage->getId), 'storageId in the revision is different from the original');
 
 }
 #vim:ft=perl

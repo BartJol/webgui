@@ -7,10 +7,82 @@ upgrading from one version to the next, or even between multiple
 versions. Be sure to heed the warnings contained herein as they will
 save you many hours of grief.
 
+7.10.24
+--------------------------------------------------------------------
+    * WebGUI now depends on Business::OnlinePayment::AuthorizeNet.  This version
+      should install automatically via the testEnvironment.pl script, or the
+      perl-standard CPAN module.
+
+7.10.23
+--------------------------------------------------------------------
+    * The default_search2 template had a bad template attachment pointing to 
+      an old WebGUI CSS Snippet called /webgui.css.  Any attachment with that
+      URL will be removed from ALL templates in the Search namespace.
+
+7.10.21
+--------------------------------------------------------------------
+    * WebGUI now depends on Kwargs.
+
+7.10.17
+--------------------------------------------------------------------
+    * Due to a formatting problem with form variables in the PayPal driver, WebGUI
+      in-shop credit was not being recieved by PayPal.  This means that Shop users
+      were charged the full amount of the cart instead of the discounted amount.
+
+7.10.15
+--------------------------------------------------------------------
+    * WebGUI now depends on Geo::Coder::Googlev3 for it's Map asset
+    * canView has to pass for any www_ methods to get called at all on account
+      plugins. This is the correct behavior, but is a change in this version.
+      Please review your custom account plugins to make sure you aren't
+      relying on the old buggy behavior.
+
+7.10.13
+--------------------------------------------------------------------
+    * WebGUI now depends on XML::FeedPP::MediaRSS.
+
+7.10.12
+--------------------------------------------------------------------
+    * The Dashboard has been extended to include Asset Dashlets.  This gives
+      Assets fine control over which properties can be extended and which can't.
+      Assets in the Dashboard can be set to be required, which prevents them from
+      being deleted, and fixed, which prevents them from moved.
+    * The StockData and WeatherData assets now include cache settings to reduce
+      server side load.  The browser interface for the StockData asset still does
+      real time lookups.
+    * A new macro has been added, LastModifiedBy.  This returns the username of
+      the user who last modified an Asset.  If the asset in question is a Page
+      Layout or Folder, then querying that asset will also check all children.
+    * The Group form control has been extended to add a simple interface for
+      adding new Groups and changing their membership.
+
+7.10.11
+--------------------------------------------------------------------
+    * Modified TimeField, now provides popupless immediate validation with
+      an alert if the value is not interpretable when the user leaves that field
+
+7.10.10
+--------------------------------------------------------------------
+    * Asset metadata is now versioned.
+
+    * The updated versions of HTML::Packer, JavaScript::Packer and CSS::Packer
+      added for 7.10.9 require perl 5.8.9 or higher to run.
+
+7.10.9
+--------------------------------------------------------------------
+    * WebGUI now depends on Data::ICal for making and reading iCal feeds
+      for the Calendar.
+
+    * WebGUI now depends on updated versions of the HTML::Packer, JavaScript::Packer and
+      CSS::Packer modules.  These new versions have much better performance than their
+      earlier incarnations.
+
 7.10.4
 --------------------------------------------------------------------
     * WebGUI now depends on Monkey::Patch for doing sanely scoped
       monkeypatches.
+
+    * WebGUI now depends on version 0.20 of Scope::Guard.
 
 7.10.3
 --------------------------------------------------------------------

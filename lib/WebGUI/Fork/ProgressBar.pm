@@ -55,7 +55,7 @@ my $template = <<'TEMPLATE';
             url    : params.statusUrl,
             draw   : function (data) {
                 var status = YAHOO.lang.JSON.parse(data.status);
-                bar.update(status.finished, status.total);
+                bar.update(status.current, status.total);
                 document.getElementById('message').innerHTML = status.message;
                 document.getElementById('elapsed').innerHTML = data.elapsed;
             },
@@ -63,8 +63,8 @@ my $template = <<'TEMPLATE';
                 document.getElementById('loading').style.display = 'none';
                 document.getElementById('ui').style.display = 'block';
             },
-            finish : function() {
-                YAHOO.WebGUI.Fork.redirect(params.redirect);
+            finish : function(data) {
+                YAHOO.WebGUI.Fork.redirect(data.redirect || params.redirect);
             },
             error  : function (msg) {
                 alert(msg);
@@ -117,7 +117,6 @@ sub renderBar {
     );
     $tt->process( \$template, \%vars, \my $content ) or die $tt->error;
 
-    my $console = WebGUI::AdminConsole->new( $session, $form->get('icon') );
     $style->setLink( $url->extras("Fork/ProgressBar.css"), { rel => 'stylesheet' } );
     $style->setScript( $url->extras("$_.js") )
         for ( (
@@ -134,7 +133,12 @@ sub renderBar {
         'Fork/poll',
         'Fork/redirect'
         );
-    return $console->render( $content, encode_entities( $form->get('title') ) );
+    ##If the user does not have admin mode turned on, then render the content in the user function style.
+    ##Otherwise, use the AdminConsole.
+    if ($session->var->isAdminOn) {
+        return WebGUI::AdminConsole->new($session, $form->get('icon'))->render($content, encode_entities( $form->get('title') ));
+    }
+    return $session->style->userStyle($content);
 } ## end sub renderBar
 
 1;

@@ -52,24 +52,29 @@ printResult($webguiRoot);
 ###################################
 
 printTest("Perl Interpreter");
-if ($] >= 5.008) {
+if ($] >= 5.008009) {
 	printResult("OK");
 } else {
-	failAndExit("Please upgrade to 5.8 or later! Cannot continue without Perl 5.8 or higher.");
+	failAndExit("Please upgrade to 5.8.9 or later! Cannot continue without Perl 5.8.9 or higher.");
 }
 
 ##Doing this as a global is not nice, but it works
 my $missingModule = 0;
 
 checkModule("LWP",                          5.833        );
+checkModule("HTML::Form",                   5.800,     2 );
+checkModule("Net::DNS",                     0.66,        );
+checkModule("Try::Tiny",                    0.07,        );
 checkModule("HTTP::Request",                1.40         );
 checkModule("HTTP::Headers",                1.61         );
-checkModule("Test::More",                   0.82,      2 );
+checkModule("Test::More",                   0.96,      2 );
 checkModule("Test::MockObject",             1.02,      2 );
 checkModule("Test::Deep",                   0.095,       );
+checkModule("Test::LongString",             0.13,      2 );
 checkModule("Test::Exception",              0.27,      2 );
 checkModule("Test::Differences",            0.5,       2 );
 checkModule("Test::Class",                  0.31,      2 );
+checkModule("Test::MockTime",               0.09,      2 );
 checkModule("Pod::Coverage",                0.19,      2 );
 checkModule("Text::Balanced",               2.00,      2 );
 checkModule("Digest::MD5",                  2.38         );
@@ -100,7 +105,9 @@ checkModule("HTML::Template",               2.9          );
 checkModule("HTML::Template::Expr",         0.07,      2 );
 checkModule("Template",                     2.20,      2 );
 checkModule("XML::FeedPP",                  0.40         );
+checkModule("XML::FeedPP::MediaRSS",        0.02         );
 checkModule("JSON",                         2.12         );
+checkModule("JSON::PP",                     0.00         );
 checkModule("Config::JSON",                 "1.3.1"      );
 checkModule("Text::CSV_XS",                 "0.64"       );
 checkModule("Net::CIDR::Lite",              0.20         );
@@ -127,17 +134,19 @@ checkModule("Module::Find",                 "0.06"       );
 checkModule("Class::C3",                    "0.21"       );
 checkModule("Params::Validate",             "0.91"       );
 checkModule("Clone",                        "0.31"       );
-checkModule('HTML::Packer',                 "0.4"        );
-checkModule('JavaScript::Packer',           '0.04'       );
-checkModule('CSS::Packer',                  '0.2'        );
+checkModule('JavaScript::Packer',           '1.002'      );
+checkModule('CSS::Packer',                  '1.000'      );
+checkModule('HTML::Packer',                 "1.000"      );
 checkModule('Business::Tax::VAT::Validation', '0.20'     );
 checkModule('Crypt::SSLeay',                '0.57'       );
-checkModule('Scope::Guard',                 '0.03'       );
+checkModule('Scope::Guard',                 '0.20'       );
 checkModule('Digest::SHA',                  '5.47'       );
 checkModule("CSS::Minifier::XS",            "0.03"       );
 checkModule("JavaScript::Minifier::XS",     "0.05"       );
 checkModule("Readonly",                     "1.03"       );
 checkModule("Business::PayPal::API",        "0.62"       );
+checkModule("Business::OnlinePayment",      "3.01"       );
+checkModule("Business::OnlinePayment::AuthorizeNet",      "3.22"       );
 checkModule("Locales",                      "0.10"       );
 checkModule("Test::Harness",                "3.17"       );
 checkModule("DateTime::Event::ICal",        "0.10"       );
@@ -149,6 +158,10 @@ checkModule('IO::Socket::SSL',                           );
 checkModule('Net::Twitter',                 "3.13006"    );
 checkModule('PerlIO::eol',                  "0.14"       );
 checkModule('Monkey::Patch',                '0.03'       );
+checkModule('Kwargs',                                    );
+checkModule('Data::ICal',                   '0.16'       );
+checkModule('common::sense',                '3.2'        );
+checkModule('Geo::Coder::Googlev3',         '0.07'       );
 
 failAndExit("Required modules are missing, running no more checks.") if $missingModule;
 

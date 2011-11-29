@@ -38,7 +38,7 @@ $session->{_env}->{_env} = \%newEnvHash;
 
 my $i18n = WebGUI::International->new($session,'Macro_L_loginBox');
 
-plan tests => 30;
+plan tests => 31;
 
 my $output = WebGUI::Macro::L_loginBox::process($session,'','',$template->getId);
 my %vars = simpleTextParser($output);
@@ -155,6 +155,12 @@ $output = WebGUI::Macro::L_loginBox::process($session,'','',$template->getId);
 %vars = simpleTextParser($output);
 like($vars{'form.header'}, qr{https://}, 'form.header action set to use SSL by encryptLogin');
 
+WebGUI::Test->originalConfig('webServerPort');
+$session->config->set('webServerPort', 8081);
+$output = WebGUI::Macro::L_loginBox::process($session,'','',$template->getId);
+%vars = simpleTextParser($output);
+unlike($vars{'form.header'}, qr{:8081}, '... when setting, remove the port');
+
 ##Finally, a test that the default Template exists
 
 $output = WebGUI::Macro::L_loginBox::process($session,'','','');
@@ -207,6 +213,7 @@ sub setupTest {
 	my $properties = {
 		title => 'L_loginBox test template',
 		className => 'WebGUI::Asset::Template',
+		parser    => 'WebGUI::Asset::Template::HTMLTemplate',
 		url => 'L-loginbox-test',
 		namespace => 'Macro/L_loginBox',
 		groupIdEdit => 3,

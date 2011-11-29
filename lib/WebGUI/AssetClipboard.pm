@@ -72,6 +72,7 @@ sub copyInFork {
     }
     my $ids   = $asset->getLineage(\@pedigree);
     my $tree  = WebGUI::ProgressTree->new($session, $ids);
+    $process->update(sub { $tree->json });
     my $patch = Monkey::Patch::patch_class(
         'WebGUI::Asset', 'duplicate', sub {
             my $duplicate = shift;
@@ -149,6 +150,10 @@ A hash reference of options that can modify how this method works.
 
 Assets that normally autocommit their workflows (like CS Posts, and Wiki Pages) won't if this is true.
 
+=head4 skipNotification
+
+Disable sending a notification that a new revision was added, for those assets that support it.
+
 =head4 state
 
 A state for the duplicated asset (defaults to 'published')
@@ -159,8 +164,15 @@ sub duplicate {
     my $self        = shift;
     my $options     = shift;
     my $parent      = $self->getParent;
+    ##Remove state and pass all other options along to addChild
+    my $asset_state = delete $options->{state};
     my $newAsset    
-        = $parent->addChild( $self->get, undef, $self->get("revisionDate"), { skipAutoCommitWorkflows => $options->{skipAutoCommitWorkflows} } );
+        = $parent->addChild(
+            $self->get,
+            undef,
+            $self->get("revisionDate"),
+            $options,
+        );
 
     if (! $newAsset) {
         $self->session->log->error(
@@ -170,11 +182,12 @@ sub duplicate {
     }
     # Duplicate metadata fields
     my $sth = $self->session->db->read(
-        "select * from metaData_values where assetId = ?", 
-        [$self->getId]
+        "select * from metaData_values where assetId = ? and revisionDate = ?",
+        [$self->getId, $self->get('revisionDate')]
     );
     while (my $h = $sth->hashRef) {
-        $self->session->db->write("insert into metaData_values (fieldId, assetId, value) values (?, ?, ?)", [$h->{fieldId}, $newAsset->getId, $h->{value}]);
+        $self->session->db->write("insert into metaData_values (fieldId,
+            assetId, revisionDate, value) values (?, ?, ?, ?)", [$h->{fieldId}, $newAsset->getId, $newAsset->get('revisionDate'), $h->{value}]);
     }
 
     # Duplicate keywords
@@ -188,8 +201,8 @@ sub duplicate {
         keywords    => $keywords,
     } );
 
-    if (my $state = $options->{state}) {
-        $newAsset->setState($state);
+    if ($asset_state) {
+        $newAsset->setState($asset_state);
     }
 
     return $newAsset;
@@ -316,6 +329,7 @@ sub pasteInFork {
     my ( $process, $args ) = @_;
     my $session = $process->session;
     my $self    = WebGUI::Asset->new( $session, $args->{assetId} );
+    $session->asset( $self );
     my @roots   = grep { $_ && $_->canEdit }
         map { WebGUI::Asset->newPending( $session, $_ ) } @{ $args->{list} };
 
@@ -326,6 +340,7 @@ sub pasteInFork {
     } @roots;
 
     my $tree = WebGUI::ProgressTree->new( $session, \@ids );
+    $process->update(sub { $tree->json });
     my $patch = Monkey::Patch::patch_class(
         'WebGUI::Asset',
         'indexContent',
@@ -453,8 +468,7 @@ sub www_copyList {
 sub www_createShortcut {
 	my $self    = shift;
     my $session = $self->session;
-    return $session->privilege->insufficient()
-        if !$session->user->isInGroup(12) || !$self->canView;
+    return $session->privilege->insufficient() if ! $self->canEdit;
 	my $isOnDashboard = $self->getParent->isa('WebGUI::Asset::Wobject::Dashboard');
 
 	my $shortcutParent = $isOnDashboard? $self->getParent : WebGUI::Asset->getImportNode($session);

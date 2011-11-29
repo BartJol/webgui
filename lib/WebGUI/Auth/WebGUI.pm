@@ -23,6 +23,7 @@ use WebGUI::User;
 use WebGUI::Utility;
 use WebGUI::Form::Captcha;
 use WebGUI::Macro;
+use Scope::Guard qw(guard);
 use Encode ();
 
 our @ISA = qw(WebGUI::Auth);
@@ -269,12 +270,26 @@ sub createAccountSave {
     $properties->{ identifier           } = $self->hashPassword($password);
     $properties->{ passwordLastUpdated  } = time();
     $properties->{ passwordTimeout      } = $setting->get("webguiPasswordTimeout");
-    $properties->{ status } = 'Deactivated' if ($setting->get("webguiValidateEmail"));
 
     my $afterCreateMessage = $self->SUPER::createAccountSave($username,$properties,$password,$profile);
+    my $sendEmail   = $setting->get('webguiValidateEmail');
+
+    # We need to deactivate the user and log him out if there are additional
+    # things that need to be done before he should be logged in.
+    my $cleanupUser;
+    if ($sendEmail || !$setting->get('enableUsersAfterAnonymousRegistration')) {
+        $cleanupUser = guard {
+            $self->user->status('Deactivated');
+            $session->var->end($session->var->get('sessionId'));
+            $session->var->start(1, $session->getId);
+            my $u = WebGUI::User->new($session, 1);
+            $self->{user} = $u;
+            $self->logout;
+        };
+    }
 
     # Send validation e-mail if required
-    if ($setting->get("webguiValidateEmail")) {
+    if ($sendEmail) {
         my $key = $session->id->generate;
         $self->saveParams($self->userId,"WebGUI",{emailValidationKey=>$key});
         my $mail = WebGUI::Mail::Send->create($self->session, {
@@ -290,12 +305,6 @@ WebGUI::Asset::Template->new($self->session,$self->getSetting('accountActivation
         $mail->addText($text);
         $mail->addFooter;
         $mail->queue;
-        $self->user->status("Deactivated");
-        $session->var->end($session->var->get("sessionId"));
-        $session->var->start(1,$session->getId);
-        my $u = WebGUI::User->new($session,1);
-        $self->{user} = $u;
-        $self->logout;
         return $self->displayLogin($i18n->get('check email for validation','AuthWebGUI'));
     }
     return $afterCreateMessage;
@@ -1128,7 +1137,13 @@ sub emailRecoverPasswordFinish {
     my $mail = WebGUI::Mail::Send->create($session, { to=>$email, subject=>$i18n->get('WebGUI password recovery')});
     my $vars = { };
     $vars->{recoverPasswordUrl} = $session->url->append($session->url->getSiteURL,'op=auth;method=emailResetPassword;token='.$recoveryGuid);
-    my $template  = WebGUI::Asset->newByDynamicClass($session, $session->setting->get('webguiPasswordRecoveryEmailTemplate'));
+    my $templateId = $session->setting->get('webguiPasswordRecoveryEmailTemplate');
+    my $template  = WebGUI::Asset->newByDynamicClass($session, $templateId);
+    if (!$template) {
+        $session->errorHandler->error("Can't instantiate template $templateId for template email recovery");
+        my $i18n = WebGUI::International->new($self->session, 'Asset');
+        return $i18n->get('Error: Cannot instantiate template').' '.$templateId;
+    }
     my $emailText = $template->process($vars);
     WebGUI::Macro::process($session, \$emailText);
     $mail->addText($emailText);

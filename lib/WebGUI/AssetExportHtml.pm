@@ -25,6 +25,7 @@ use WebGUI::Session;
 use URI::URL;
 use Scope::Guard qw(guard);
 use WebGUI::ProgressTree;
+use WebGUI::Event;
 
 =head1 NAME
 
@@ -399,7 +400,6 @@ sub exportBranch {
             $cs->output->setHandle($handle);
             my $guard = guard {
                 close $handle;
-                $cs->var->end;
                 $cs->close();
                 $asset->$report('collateral notes', $output) if $output;
             };
@@ -423,7 +423,7 @@ sub exportBranch {
         $asset->$report('done');
     };
 
-    my $assetIds = $self->exportGetDescendants(undef, $depth);
+    my $assetIds = $self->exportGetAssetIds($options);
     foreach my $assetId ( @{$assetIds} ) {
         $exportAsset->( $assetId );
     }
@@ -507,6 +507,37 @@ sub exportCheckExportable {
 
     # passed checks, return 1
     return 1;
+}
+
+#-------------------------------------------------------------------
+
+=head2 exportGetAssetIds ( options )
+
+Gets the ids of all the assets to be exported in this run as an arrayref.
+Takes the same options spec as exportBranch.
+
+=cut
+
+sub exportGetAssetIds {
+    my ($self, $options) = @_;
+    my $session = $self->session;
+    my $ids     = $self->exportGetDescendants( undef, $options->{depth} );
+    return $ids unless $options->{exportRelated};
+
+    # We don't particularly care about the order of the assetIds. The only
+    # thing that might care is the ProgressTree page, and it computes the tree
+    # by looking at asset lineage anyway. We do want to follow chains of
+    # related assets though, so we'll use $ids as a queue and push related
+    # assets onto the end (unless, of course, they're already in the set).
+    my %set;
+    while (my $id = shift @$ids) {
+        my $asset = WebGUI::Asset->new($session, $id);
+        undef $set{$id};
+        for my $id (@{ $asset->exportGetRelatedAssetIds }) {
+            push(@$ids, $id) unless exists $set{$id};
+        }
+    }
+    return [ keys %set ];
 }
 
 #-------------------------------------------------------------------
@@ -595,6 +626,31 @@ sub exportGetDescendants {
 
 #-------------------------------------------------------------------
 
+=head2 exportGetRelatedAssetIds
+
+Normally all an asset's shorcuts and its container (via $asset->getContainer),
+but override if exporting your asset would invalidate other exported assets.
+If exportRelated is checked, this will be called and any assetIds it returns
+will be exported when your asset is exported.
+
+This method returns an arrayref, and IS ALLOWED to contain the same assetId
+more than once. Anyone calling this function should check for duplicates. No
+particular order should be assumed.
+
+=cut
+
+sub exportGetRelatedAssetIds {
+    my $self = shift;
+    my $related = WebGUI::Asset::Shortcut->getShortcutsForAssetId(
+        $self->session,
+        $self->getId
+    );
+    push @$related, $self->getContainer->getId;
+    return $related;
+}
+
+#-------------------------------------------------------------------
+
 =head2 exportGetUrlAsPath ( index )
 
 Translates an asset's URL into an appropriate path and filename for exporting. For
@@ -671,8 +727,9 @@ sub exportInFork {
     my $session = $process->session;
     my $self = WebGUI::Asset->new( $session, delete $args->{assetId} );
     $args->{indexFileName} = delete $args->{index};
-    my $assetIds = $self->exportGetDescendants( undef, $args->{depth} );
+    my $assetIds = $self->exportGetAssetIds($args);
     my $tree = WebGUI::ProgressTree->new( $session, $assetIds );
+    $process->update( sub { $tree->json } );
     my %reports = (
         'done'                => sub { $tree->success(shift) },
         'exporting page'      => sub { $tree->focus(shift) },
@@ -908,6 +965,7 @@ sub exportWriteFile {
         $self->session->output->print($contents);
     }
     $fh->close;
+    fire $self->session, 'asset::export' => $dest;
 }
 
 #-------------------------------------------------------------------
@@ -947,6 +1005,12 @@ sub www_export {
         -hoverHelp      => $i18n->get('Depth description'),
         -name           => "depth",
         -value          => 99,
+    );
+    $f->yesNo(
+        -label          => $i18n->get('Export Related Assets'),
+        -hoverHelp      => $i18n->get('Export Related Assets description'),
+        -name           => "exportRelated",
+        -value          => '',
     );
     $f->selectBox(
         -label          => $i18n->get('Export as user'),
@@ -1012,15 +1076,16 @@ sub www_exportStatus {
     return $session->privilege->insufficient
         unless $session->user->isInGroup(13);
     my $form    = $session->form;
-    my @vars    = qw(
-        index depth userId extrasUploadsAction rootUrlAction exportUrl
-    );
+    my @vars    = qw(index depth userId rootUrlAction exportUrl exportRelated);
     $self->forkWithStatusPage({
             plugin   => 'ProgressTree',
             title    => 'Page Export Status',
             method   => 'exportInFork',
             groupId  => 13,
             args     => {
+                # Note the difference in spelling...
+                #           v---no s                           s-----v
+                extrasUploadAction => scalar $form->get('extrasUploadsAction'),
                 assetId => $self->getId,
                 map { $_ => scalar $form->get($_) } @vars
             }

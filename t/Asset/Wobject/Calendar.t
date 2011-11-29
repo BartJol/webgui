@@ -57,8 +57,6 @@ use Data::Dumper;
 use WebGUI::Asset::Wobject::Calendar;
 use WebGUI::Asset::Event;
 
-plan tests => 12 + scalar @icalWrapTests;
-
 my $session = WebGUI::Test->session;
 
 # Do our work in the import node
@@ -302,8 +300,6 @@ addToCleanup($tag2);
 
 is(scalar @{ $windowCal->getLineage(['children'])}, 17, 'added events to the window calendar');
 
-diag "startDate: ". $windowStart->toDatabase;
-diag "endDate: ". $windowEnd->toDatabase;
 my @window = $windowCal->getEventsIn($windowStart->toDatabase, $windowEnd->toDatabase);
 
 cmp_bag(
@@ -573,6 +569,9 @@ cmp_deeply(
     '... correct set of events in list view'
 );
 
+ok(exists $listVars->{events}->[0]->{new_year} && $listVars->{events}->[0]->{new_year}, 'first event has new_year set');
+ok(exists $listVars->{events}->[0]->{new_month} && $listVars->{events}->[0]->{new_month}, 'first event has new_month set');
+ok(exists $listVars->{events}->[0]->{new_day} && $listVars->{events}->[0]->{new_day}, 'first event has new_day set');
 
 ######################################################################
 #
@@ -595,3 +594,18 @@ cmp_deeply(
     [],
     'getFeeds: returns an empty array ref with no feeds'
 );
+
+##Update with JSON and try again :)
+$feedCal->update({icalFeeds => '[]'});
+is_deeply $feedCal->get('icalFeeds'), [], 'set as JSON, returned perl';
+
+$feedCal->{_properties}->{icalFeeds} = '[]';
+is $feedCal->get('icalFeeds'), '[]', 'poked into the object directly, returned as JSON';
+
+cmp_deeply(
+    $feedCal->getFeeds(),
+    [],
+    'but getFeeds still returns a data structure.'
+);
+
+done_testing;
